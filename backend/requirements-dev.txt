@@ -1,0 +1,6 @@
+# Test-only dependencies. Deliberately NOT in requirements.txt: that file is one of
+# the three inputs to the RUNTIME fingerprint (scripts/app_payload.py), so touching
+# it would force every user onto a full reinstall instead of the ~35 KB patch update.
+-r requirements.txt
+pytest>=8
+httpx>=0.27        # required by FastAPI/Starlette's TestClient

@@ -34,7 +34,19 @@ python scripts/app_payload.py --build dist/oasis-backend/app --version v0.1.0   
 
 Must be built **on the target OS** (PyInstaller cannot cross-compile). Releasing is `git tag v0.1.0 && git push origin v0.1.0`, which triggers `.github/workflows/release.yml` to build Windows + macOS-arm64, bundle FFmpeg, and publish both full zips plus `oasis-backend-patch.zip`.
 
-**There are no tests** — no pytest, no jest/vitest, no test files anywhere in `backend/` or `web/src/`. Verify changes by exercising the running app, not by running a suite.
+Backend tests (pytest, in `backend/tests/`; the frontend has none — verify `web/` changes by exercising the running app):
+
+```
+pip install -r backend/requirements-dev.txt
+cd backend && python -m pytest          # CI runs the same via .github/workflows/test.yml
+```
+
+- **Dev dependencies live in `requirements-dev.txt`, never `requirements.txt`.** `requirements.txt` is one of the two inputs to the `RUNTIME` fingerprint (*Versioning and self-update*), so touching it forces every user onto a full reinstall instead of the ~35 KB patch. Likewise keep `conftest.py`/tests out of `backend/*.py` — `scripts/app_payload.py` ships every top-level `backend/*.py` file (subdirectories are skipped, so `backend/tests/` is safe).
+- `backend/tests/conftest.py` points `DB_PATH`, `OASIS_MEDIA_ROOT` and `OASIS_SITES_DIR` at a temp dir **before** anything is imported (those modules read their env at import time) and the `db` / `auth_file` / `sites_dir` fixtures re-point the module attributes per test. A test must never be able to touch a real `oasis.db` or `oasis.auth.json`; use those fixtures instead of the module globals.
+- API tests use `TestClient`, but auth.py judges callers by peer address and `Host`, so they set the peer through the small `_Peer` ASGI wrapper in `test_api.py` (this Starlette's `TestClient` hard-codes it). The startup hook is intentionally never run.
+- The suite is mutation-checked: the auth/path-guard/adapter-matching/download-integrity tests were verified to fail when the guard they cover is removed. When you change one of those guards, change its test with it rather than loosening it.
+- Tests marked `xfail(strict=True)` document **known defects** (currently the `/api/stream` `Range` handling: suffix ranges, ranges past EOF, malformed headers). Fixing the bug makes the strict xfail fail — delete the marker in the same change.
+- Not covered: anything needing a real browser or FFmpeg (`download.py`, `encode.py`, `merge.py`, the Selenium paths in `catalog.process_url` / `process_listing_url`), `updater.py`, and `run_backend.py`.
 
 ## Architecture
 

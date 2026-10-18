@@ -128,3 +128,10 @@ oasis/
   ```
 - **資料庫管理**:
   若要查看或編輯影片元數據，可以直接使用 SQLite 客戶端打開 `backend/oasis.db`。
+- **後端測試**（pytest，位於 `backend/tests/`，CI 會在每次 push / PR 自動執行）:
+  ```bash
+  pip install -r backend/requirements-dev.txt
+  cd backend
+  python -m pytest
+  ```
+  測試用的暫存資料庫與設定檔都放在暫存資料夾，不會動到你自己的 `oasis.db`。測試用的套件放在 `requirements-dev.txt`，**不要**加進 `requirements.txt`——後者會影響 `RUNTIME` 指紋，改動它會讓所有使用者的更新退回「完整重新安裝」。涵蓋範圍：存取碼與本機判斷（`auth.py`）、站台比對（`site_config.py`）、資料庫與系列邏輯（`catalog.py`）、API 的驗證與路徑防護、HLS／漸進式下載的續傳與完整性。需要真實瀏覽器或 FFmpeg 的部分（Selenium 解析、轉檔）以及更新程序尚未涵蓋。

@@ -1,0 +1,32 @@
+name: Test
+
+# Backend test suite (backend/tests). Runs on every push and pull request; the
+# release workflow is separate and only runs on version tags.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"        # the version the release build freezes against
+          cache: pip
+          cache-dependency-path: backend/requirements*.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements-dev.txt
+
+      - name: Run tests
+        working-directory: backend
+        run: python -m pytest
