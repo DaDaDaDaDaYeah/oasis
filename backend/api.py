@@ -346,6 +346,7 @@ async def _backfill_covers():
         print(f'⚠️ 封面補抓查詢失敗: {e}')
         return
     if not todo:
+        await _export_covers()
         return
     print(f'🖼  發現 {len(todo)} 張封面尚未存檔，開始補抓...')
     loop = asyncio.get_running_loop()
@@ -366,6 +367,20 @@ async def _backfill_covers():
         # Be gentle on the origin CDN and keep the event loop responsive.
         await asyncio.sleep(0.3)
     print(f'✅ 封面補抓完成：{done}/{len(todo)} 已存入資料庫')
+    await _export_covers()
+
+
+async def _export_covers():
+    """Write every cached cover next to its video (never overwriting). Idempotent
+    and cheap once done -- one stat per video -- so it simply runs on every start."""
+    loop = asyncio.get_running_loop()
+    try:
+        counts = await loop.run_in_executor(None, catalog.export_all_covers)
+    except Exception as e:
+        print(f'⚠️ 封面匯出失敗: {e}')
+        return
+    if counts.get('written'):
+        print(f"🖼  已將 {counts['written']} 張封面存到影片旁（{counts}）")
 
 
 def _resume_pending_downloads():
@@ -802,6 +817,11 @@ def _download_worker(video_id: int, url: str):
                 conn.commit()
                 conn.close()
                 print(f"✅ [PID {_os.getpid()}] Download finished, DB updated for {record['code']} → {local_path}")
+                # Put the cover beside the new file (ABC-123.mp4 -> ABC-123.jpg).
+                try:
+                    _cat.export_cover_file(video_id)
+                except Exception as e:
+                    print(f"⚠️ 封面匯出失敗: {e}")
             else:
                 print(f"⚠️ [PID {_os.getpid()}] Download finished but could not locate file for {record['code']}")
     except Exception as e:
@@ -1429,6 +1449,13 @@ def get_video(video_id: int):
     if not record:
         raise HTTPException(status_code=404, detail='影片不存在')
     return _enrich_record(record, with_size=True)
+
+
+@app.post('/api/covers/export')
+def export_covers():
+    """Write every cached cover next to its video file (ABC-123.mp4 -> ABC-123.jpg).
+    Existing images are never overwritten. Returns counts by outcome."""
+    return {'results': catalog.export_all_covers()}
 
 
 @app.get('/api/stream/cover/{video_id}')

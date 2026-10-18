@@ -511,6 +511,27 @@ def test_import_cannot_plant_a_path_that_streams_a_file(media, outside):
 
 
 # =============================================================================
+# Cover export
+# =============================================================================
+
+def test_export_covers_endpoint_writes_files_next_to_videos(media, local):
+    rel, _ = media_file(media)
+    vid = add_video(video_path=rel)
+    catalog.store_cover_image(vid, b'\xff\xd8\xff\xe0jpg', 'image/jpeg')
+    (media / 'movies' / 'ABC-123.jpg').unlink()                     # as if exported long ago
+    r = local.post('/api/covers/export')
+    assert r.status_code == 200 and r.json() == {'results': {'written': 1}}
+    assert (media / 'movies' / 'ABC-123.jpg').exists()
+    assert local.post('/api/covers/export').json() == {'results': {'exists': 1}}
+
+
+def test_export_covers_requires_the_access_code_from_outside(media):
+    c = make_client('lan')
+    r = c.post('/api/covers/export')
+    assert r.status_code in (401, 403)
+
+
+# =============================================================================
 # Streaming
 # =============================================================================
 

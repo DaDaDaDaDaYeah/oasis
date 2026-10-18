@@ -755,6 +755,103 @@ def store_cover_image(video_id: int, data: bytes, mime: str):
     )
     conn.commit()
     conn.close()
+    # A cover that arrives after the download (backfill, lazy fetch, an edit) still
+    # lands next to the video. Best-effort: the DB write above is what matters.
+    try:
+        export_cover_file(video_id)
+    except Exception as exc:
+        print(f'⚠️ 封面匯出失敗 (id={video_id}): {exc}')
+
+
+# MIME type -> file extension for the cover files written next to a video.
+_COVER_EXT = {
+    'image/jpeg': '.jpg', 'image/jpg': '.jpg', 'image/pjpeg': '.jpg',
+    'image/png': '.png', 'image/webp': '.webp', 'image/gif': '.gif',
+}
+# Any of these beside the video counts as "already has a cover": a user (or a media
+# server such as Jellyfin) may have put its own there, and it must not be replaced.
+_COVER_EXISTING_EXTS = ('.jpg', '.jpeg', '.png', '.webp', '.gif')
+
+
+def export_cover_file(video_id: int) -> str:
+    """Write the video's cached cover next to its video file as <name>.<ext>.
+
+    Same stem as the video (ABC-123.mp4 -> ABC-123.jpg), which is the thumbnail
+    convention Plex, Jellyfin, Emby and Kodi pick up. Never overwrites: if any
+    <name>.jpg/.jpeg/.png/.webp/.gif is already there it is left alone.
+
+    Returns what happened: 'written', 'exists', 'no-cover', 'no-video' or
+    'unsupported' (a cover MIME with no known extension). Only the cached bytes
+    are used -- this never touches the network, so it is safe to call anywhere.
+    """
+    conn = get_connection()
+    row = conn.execute('SELECT video_path FROM videos WHERE id = ?', (video_id,)).fetchone()
+    conn.close()
+    rel = row['video_path'] if row else None
+    if not rel:
+        return 'no-video'
+
+    # Same containment rule as the stream/open/delete endpoints: resolve symlinks
+    # and refuse anything that leaves MEDIA_ROOT, since video_path is DB-supplied.
+    root = os.path.realpath(MEDIA_ROOT)
+    video_file = os.path.realpath(os.path.join(root, rel))
+    if not video_file.startswith(root + os.sep) or not os.path.isfile(video_file):
+        return 'no-video'
+
+    src = get_cover_source(video_id)
+    if not src or not src['data']:
+        return 'no-cover'
+    ext = _COVER_EXT.get((src['mime'] or '').split(';')[0].strip().lower())
+    if not ext:
+        return 'unsupported'
+
+    stem = os.path.splitext(video_file)[0]
+    if any(os.path.exists(stem + e) for e in _COVER_EXISTING_EXTS):
+        return 'exists'
+
+    target = stem + ext
+    data = bytes(src['data'])
+    tmp = f'{target}.{os.getpid()}.tmp'
+    try:
+        with open(tmp, 'wb') as f:
+            f.write(data)
+        # link() fails if the target appeared meanwhile, so a racing writer (or a
+        # user dropping their own image in) is never clobbered, unlike replace().
+        os.link(tmp, target)
+    except FileExistsError:
+        return 'exists'
+    except OSError:
+        # No hard links (FAT/exFAT, some SMB/NFS mounts): exclusive-create instead,
+        # which is still never an overwrite.
+        try:
+            with open(target, 'xb') as f:
+                f.write(data)
+        except FileExistsError:
+            return 'exists'
+    finally:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+    return 'written'
+
+
+def export_all_covers() -> dict:
+    """export_cover_file for every video that has a local file. Returns counts by
+    outcome, e.g. {'written': 12, 'exists': 40, 'no-cover': 3}."""
+    conn = get_connection()
+    ids = [r['id'] for r in conn.execute(
+        "SELECT id FROM videos WHERE video_path IS NOT NULL AND video_path != '' ORDER BY id")]
+    conn.close()
+    counts: dict[str, int] = {}
+    for vid in ids:
+        try:
+            outcome = export_cover_file(vid)
+        except Exception as exc:
+            print(f'⚠️ 封面匯出失敗 (id={vid}): {exc}')
+            outcome = 'error'
+        counts[outcome] = counts.get(outcome, 0) + 1
+    return counts
 
 
 def get_cover_source(video_id: int) -> dict | None:

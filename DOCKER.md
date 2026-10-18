@@ -20,6 +20,7 @@ docker compose logs api       # 找到「存取碼： XXXX-XXXX」
 - **資料都在 `./data`**（可用 `OASIS_DATA=/path/to/folder` 改位置）：`oasis.db`、`movies/`、`sites/`（你自己的 adapter 不會被覆蓋，內建的在每次啟動時更新）。備份就是複製這個資料夾。
 - **用 `http://<IP>:3000`，不要用公開網站。** https 的公開網站無法連到 http 的伺服器位址（瀏覽器的混合內容限制）。
 - **沒有「用本機播放器開啟」。** 那個功能會在後端所在的機器上開播放器，容器內做不到；用網頁內建播放器。
+- **封面圖檔**：封面存在 `oasis.db`，同時也會以同名圖檔寫進 `movies/`（`ABC-123.mp4` → `ABC-123.jpg`），既有的圖檔不會被覆蓋。
 - **權限**：容器以 UID/GID 1000 執行。你的帳號不是 1000 的話：`PUID=$(id -u) PGID=$(id -g) docker compose up -d`（或寫進 `.env`）。
 - **更新**：`git pull && docker compose up -d --build`。軟體內建的更新器只用於打包版，這裡不會用到。
 - **換 IP 不用重啟。** 網頁介面預設連到「你瀏覽的那個位址」的 `:8000`，後端也會允許同一個位址的網頁來源（只限 IP、`localhost`、單一名稱或 `.local`，公開網域不會被放行）。要掛在自己的網域／反向代理後面時，用 `ALLOWED_ORIGINS` 加入該網域。
