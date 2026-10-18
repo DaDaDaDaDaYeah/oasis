@@ -16,7 +16,7 @@ import re
 import socket
 
 
-def _truthy(value: str | None) -> bool:
+def truthy(value: str | None) -> bool:
     return (value or '').strip().lower() in {'1', 'true', 'yes', 'on'}
 
 
@@ -25,7 +25,7 @@ def bind_host() -> str:
     host = os.environ.get('HOST', '').strip()
     if host:
         return host
-    return '0.0.0.0' if _truthy(os.environ.get('OASIS_LAN')) else '127.0.0.1'
+    return '0.0.0.0' if truthy(os.environ.get('OASIS_LAN')) else '127.0.0.1'
 
 
 def is_loopback_host(host: str) -> bool:
@@ -40,7 +40,7 @@ def is_loopback_host(host: str) -> bool:
 
 def lan_enabled() -> bool:
     """True when the backend is (meant to be) reachable from other devices."""
-    return _truthy(os.environ.get('OASIS_LAN')) or not is_loopback_host(bind_host())
+    return truthy(os.environ.get('OASIS_LAN')) or not is_loopback_host(bind_host())
 
 
 def lan_addresses() -> list[str]:
@@ -108,3 +108,45 @@ def describe_urls(port: int | str, frontend_port: int | str | None = 3000) -> li
         if frontend_port:
             out.append(('網頁介面', f'http://{ip}:{frontend_port}'))
     return out
+
+
+def same_host_cors_enabled() -> bool:
+    """Docker/headless mode: allow a page whose origin host is the very host the
+    caller used to reach the backend (http://nas:3000 -> http://nas:8000)."""
+    return truthy(os.environ.get('OASIS_CORS_SAME_HOST'))
+
+
+def _hostname_of_host_header(host: str) -> str:
+    host = (host or '').strip()
+    if host.startswith('['):                       # [::1]:8000
+        return host[1:].split(']', 1)[0].lower()
+    return (host.rsplit(':', 1)[0] if ':' in host else host).lower()
+
+
+def _is_private_style_name(name: str) -> bool:
+    """A name an outside party cannot own: an IP literal, localhost, a bare
+    hostname (nas) or an mDNS .local name. A public DNS name is excluded so a
+    DNS-rebinding page (evil.example -> your server's IP) is never matched; use
+    ALLOWED_ORIGINS for a real domain."""
+    if not name:
+        return False
+    try:
+        ipaddress.ip_address(name)
+        return True
+    except ValueError:
+        pass
+    return name == 'localhost' or '.' not in name or name.endswith('.local')
+
+
+def origin_matches_host(origin: str, host_header: str) -> bool:
+    """True when *origin* is http(s) on the same host the request was addressed to
+    (any port) and that host is a private-style name."""
+    from urllib.parse import urlsplit
+    try:
+        parts = urlsplit(origin or '')
+        origin_host = (parts.hostname or '').lower()
+    except ValueError:
+        return False
+    if parts.scheme not in ('http', 'https') or parts.path not in ('', '/') or not origin_host:
+        return False
+    return origin_host == _hostname_of_host_header(host_header) and _is_private_style_name(origin_host)

@@ -10,8 +10,8 @@ from delete import deleteM3u8, deleteMp4
 from encode import ffmpegEncode
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.chrome.service import Service
 from site_config import (
+    chrome_service,
     detect_site, get_video_name, get_m3u8_url,
     setup_driver_for_site, wait_for_page_load,
     get_request_headers, resolve_m3u8_to_stream, build_ts_url,
@@ -79,7 +79,7 @@ def download(url, progress_cb=None):
   # 套用網站特定的 driver 設定
   options = setup_driver_for_site(options, adapter)
 
-  service = Service(log_path=os.devnull)
+  service = chrome_service(log_path=os.devnull)
   dr = webdriver.Chrome(options=options, service=service)
   _active_driver = dr
   try:

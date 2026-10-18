@@ -880,7 +880,7 @@ def _start_scrape_driver(adapter: dict):
     """The headless Chrome the scraping paths share."""
     from selenium import webdriver
     from selenium.webdriver.chrome.options import Options
-    from site_config import setup_driver_for_site
+    from site_config import chrome_service, setup_driver_for_site
 
     options = Options()
     options.add_argument('--no-sandbox')
@@ -891,7 +891,9 @@ def _start_scrape_driver(adapter: dict):
         'user-agent=Mozilla/5.0 (Windows NT 6.1; Win64; x64) '
         'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/84.0.4147.125 Safari/537.36'
     )
-    return webdriver.Chrome(options=setup_driver_for_site(options, adapter))
+    return webdriver.Chrome(
+        options=setup_driver_for_site(options, adapter), service=chrome_service()
+    )
 
 
 def fetch_page_metadata(url: str) -> tuple:

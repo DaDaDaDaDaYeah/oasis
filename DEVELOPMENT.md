@@ -80,6 +80,9 @@ Light 更新失敗不會動到硬碟上任何東西，會自動退回走 Full；
 - 環境變數 `ALLOWED_ORIGINS` 可設定 CORS 網域限制。預設為 `http://localhost:3000` 以及部署的網站。
 - **區網模式**：`./oasis-portal.sh --lan`（Windows：`-Lan`），或設定 `OASIS_LAN=1` / 非 loopback 的 `HOST`（例如打包版 `HOST=0.0.0.0`）。後端改聽 `0.0.0.0`，啟動訊息會印出手機要打開的網址，CORS 另外放行「本機自己的區網位址」（`backend/lan.py`；不是整個私有網段）。不改變信任模型：從網路來的請求永遠不是本機，仍需存取碼。
 
+### Docker
+家用伺服器／NAS 用 `docker compose up -d --build`，說明見 [DOCKER.md](./DOCKER.md)。映像以環境變數設定：`CHROME_BIN` / `CHROMEDRIVER_PATH`（用發行版的 Chromium，不在執行時下載 driver）、`OASIS_CORS_SAME_HOST`（允許與請求同一主機的網頁來源，見 `lan.origin_matches_host`）、`OASIS_REMOTE_ACCESS`（啟動時自動開啟遠端存取並把存取碼印到 log——容器內沒有人是「本機」，設定頁的開關到不了）。
+
 ### 前端環境變數 (Frontend Next.js)
 在 `web/` 目錄中，可以建立 `.env.local` 檔案來自訂變數：
 - `NEXT_PUBLIC_BACKEND_URL`: 指向 FastAPI 後端的 URL（預設為 `http://localhost:8000`）。

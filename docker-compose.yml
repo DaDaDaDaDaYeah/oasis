@@ -1,0 +1,33 @@
+# Oasis on a home server / NAS / always-on PC.
+#
+#   mkdir -p data && docker compose up -d --build
+#   docker compose logs api        # the access code is printed here
+#
+# Then open http://<server-ip>:3000 from any device on the network and enter the code.
+# See DOCKER.md. Nothing here is published anywhere: it builds from this checkout.
+services:
+  api:
+    build: ./backend
+    init: true
+    restart: unless-stopped
+    # Run as your own user so files in ./data are yours, not root's. Create the
+    # folder first (mkdir -p data) or Docker creates it owned by root.
+    user: "${PUID:-1000}:${PGID:-1000}"
+    shm_size: 1gb          # Chromium crashes on the default 64 MB /dev/shm
+    ports:
+      - "8000:8000"
+    volumes:
+      - "${OASIS_DATA:-./data}:/data"
+    environment:
+      # Extra origins allowed to call the API (comma-separated), e.g. a reverse proxy
+      # under a real domain. Pages on the same host you browse to are already allowed.
+      ALLOWED_ORIGINS: "${ALLOWED_ORIGINS:-http://localhost:3000,https://oasis.fusion-labs.cc}"
+      TZ: "${TZ:-UTC}"
+
+  web:
+    build: ./web
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api

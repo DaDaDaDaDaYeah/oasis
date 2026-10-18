@@ -70,6 +70,8 @@ chmod +x oasis-portal.sh
 
 只想跑後端（例如你想自己架設給區網其他裝置連）可加參數：`./oasis-portal.sh --backend-only`。
 
+> 🐳 想放在家裡一台常開的機器上、讓手機和 Steam Deck 連進來？見 [DOCKER.md](./DOCKER.md)。
+
 #### 📱 用手機（同一個 Wi-Fi）連線
 
 ```bash

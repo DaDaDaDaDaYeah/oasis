@@ -1,32 +1,29 @@
-# ---- Dependencies ----
-FROM node:20-alpine AS deps
+# Oasis web UI (Next.js standalone server). Build context is ./web.
+# The UI is client-side only: the browser calls the API directly, and with no
+# NEXT_PUBLIC_BACKEND_URL it defaults to the same host as the page, on :8000.
+FROM node:22-bookworm-slim AS deps
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
 
-# ---- Build ----
-FROM node:20-alpine AS builder
+FROM node:22-bookworm-slim AS builder
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
-
-# The backend URL is resolved at build time for server-side route handlers.
-# In Docker Compose the API service is reachable at http://api:8000.
-ARG BACKEND_URL=http://api:8000
-ENV BACKEND_URL=${BACKEND_URL}
-
+ENV NEXT_TELEMETRY_DISABLED=1
 RUN npm run build
 
-# ---- Production ----
-FROM node:20-alpine AS runner
+FROM node:22-bookworm-slim AS runner
 WORKDIR /app
-ENV NODE_ENV=production
+ENV NODE_ENV=production \
+    NEXT_TELEMETRY_DISABLED=1 \
+    HOSTNAME=0.0.0.0 \
+    PORT=3000
 
-# Next.js standalone output includes its own server
 COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static ./.next/static
 COPY --from=builder /app/public ./public
 
+USER node
 EXPOSE 3000
-
 CMD ["node", "server.js"]

@@ -542,8 +542,26 @@ def build_ts_url(seg_uri, download_base_url):
     return download_base_url + '/' + seg_uri
 
 
+def chrome_service(log_path=None):
+    """Selenium Service honouring CHROMEDRIVER_PATH, or None for Selenium's default.
+
+    Containers install a distro chromedriver that matches the distro's Chromium;
+    pointing at it avoids Selenium Manager downloading a driver at runtime (and a
+    version mismatch if that download is blocked). Unset everywhere else, so the
+    desktop behaviour is unchanged.
+    """
+    path = os.environ.get('CHROMEDRIVER_PATH') or None
+    if not path and log_path is None:
+        return None
+    from selenium.webdriver.chrome.service import Service
+    return Service(executable_path=path, log_path=log_path)
+
+
 def setup_driver_for_site(options, adapter: dict):
     """Apply the adapter's Selenium driver options."""
+    chrome_bin = os.environ.get('CHROME_BIN')
+    if chrome_bin:
+        options.binary_location = chrome_bin
     driver_cfg = adapter.get('driver', {})
     if driver_cfg.get('performance_log'):
         options.set_capability('goog:loggingPrefs', {'performance': 'ALL'})

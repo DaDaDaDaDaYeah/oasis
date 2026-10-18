@@ -21,6 +21,7 @@ import time
 import urllib.parse
 import requests
 
+import contextvars
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request, Depends, Query, BackgroundTasks
 from fastapi.responses import StreamingResponse, JSONResponse, Response, RedirectResponse
@@ -71,8 +72,29 @@ ALLOWED_ORIGINS = [
 # Computed once at start: restart after the machine's IP changes.
 _LAN_ORIGIN_REGEX = lan.lan_origin_regex() if lan.lan_enabled() else None
 
+_request_host: contextvars.ContextVar[str] = contextvars.ContextVar('oasis_request_host', default='')
+
+
+class _SameHostCORS(CORSMiddleware):
+    """CORS that also admits http://<host>:<any port> when the request itself was
+    addressed to <host> -- the Docker / home-server case, where the server's LAN
+    address is unknown to the backend (see lan.origin_matches_host). Opt-in via
+    OASIS_CORS_SAME_HOST; it widens CORS only, never who is trusted."""
+
+    async def __call__(self, scope, receive, send):
+        if scope['type'] == 'http':
+            for key, value in scope['headers']:
+                if key == b'host':
+                    _request_host.set(value.decode('latin-1'))
+                    break
+        await super().__call__(scope, receive, send)
+
+    def is_allowed_origin(self, origin: str) -> bool:
+        return super().is_allowed_origin(origin) or lan.origin_matches_host(origin, _request_host.get())
+
+
 app.add_middleware(
-    CORSMiddleware,
+    _SameHostCORS if lan.same_host_cors_enabled() else CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
     allow_origin_regex=_LAN_ORIGIN_REGEX,
     allow_methods=['*'],
@@ -220,7 +242,12 @@ def _init_db():
     print('======================================================')
     print('  ✅ Oasis 已經準備好了！')
     print('')
-    print('  請打開瀏覽器，前往：https://oasis.fusion-labs.cc')
+    if lan.same_host_cors_enabled():
+        # Headless/Docker: there is no browser on this machine to open, and the
+        # public site can't reach an http server address (mixed content).
+        print('  請在同一個網路的瀏覽器打開：http://<這台伺服器的 IP>:3000，並輸入下方的存取碼')
+    else:
+        print('  請打開瀏覽器，前往：https://oasis.fusion-labs.cc')
     print('  這個視窗請保持開啟——關閉視窗會讓播放和下載功能一起停止。')
     print('======================================================')
     print('')
@@ -241,6 +268,11 @@ def _init_db():
     db_setup.create_tables()
     # The console is the only place the code is ever shown, so print it on every
     # start: that is where the user goes to read it off.
+    # Headless/Docker: no one is ever "local" behind a port mapping, so the settings
+    # switch is unreachable (remote access off refuses every caller). Let the
+    # environment flip it; the code is printed just below, i.e. into `docker logs`.
+    if lan.truthy(os.environ.get('OASIS_REMOTE_ACCESS')) and not auth.has_code():
+        auth.enable()
     auth.print_code()
     if not auth.has_code():
         print('   若要用手機看片，請在「設定 → 遠端存取」開啟遠端存取。')

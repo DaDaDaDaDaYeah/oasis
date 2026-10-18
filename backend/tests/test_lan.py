@@ -136,3 +136,96 @@ def test_lan_help_explains_mixed_content_without_a_local_frontend(monkeypatch, c
     out = capsys.readouterr().out
     assert '遠端存取尚未開啟' not in out
     assert '混合內容' in out
+
+
+# --- Docker / headless: same-host CORS ---------------------------------------
+
+@pytest.mark.parametrize('origin, host', [
+    ('http://192.168.1.50:3000', '192.168.1.50:8000'),
+    ('http://nas:3000', 'nas:8000'),
+    ('http://NAS.local:3000', 'nas.local:8000'),
+    ('http://localhost:3000', 'localhost:8000'),
+    ('http://[fd00::5]:3000', '[fd00::5]:8000'),
+    ('http://192.168.1.50', '192.168.1.50:8000'),
+])
+def test_same_host_origin_is_allowed(origin, host):
+    assert lan.origin_matches_host(origin, host)
+
+
+@pytest.mark.parametrize('origin, host', [
+    ('http://192.168.1.99:3000', '192.168.1.50:8000'),     # another device's page
+    ('http://evil.example.com:3000', 'evil.example.com:8000'),  # DNS-rebinding shape
+    ('http://nas:3000', 'nas.evil.com:8000'),
+    ('ftp://nas:3000', 'nas:8000'),
+    ('http://nas:3000/path', 'nas:8000'),
+    ('null', 'nas:8000'),
+    ('', 'nas:8000'),
+    ('http://nas:3000', ''),
+])
+def test_other_origins_are_not_allowed(origin, host):
+    assert not lan.origin_matches_host(origin, host)
+
+
+def _cors_app():
+    from fastapi import FastAPI
+    import api
+    app = FastAPI()
+    app.add_middleware(api._SameHostCORS, allow_origins=['https://oasis.fusion-labs.cc'],
+                       allow_methods=['*'], allow_headers=['*'])
+
+    @app.get('/ping')
+    def ping():
+        return {'ok': True}
+
+    return app
+
+
+def test_middleware_adds_cors_headers_for_same_host_only():
+    from fastapi.testclient import TestClient
+    c = TestClient(_cors_app(), base_url='http://192.168.1.50:8000')
+    ok = c.get('/ping', headers={'Origin': 'http://192.168.1.50:3000'})
+    assert ok.headers.get('access-control-allow-origin') == 'http://192.168.1.50:3000'
+    other = c.get('/ping', headers={'Origin': 'http://192.168.1.99:3000'})
+    assert 'access-control-allow-origin' not in other.headers
+    listed = c.get('/ping', headers={'Origin': 'https://oasis.fusion-labs.cc'})
+    assert listed.headers.get('access-control-allow-origin') == 'https://oasis.fusion-labs.cc'
+
+
+def test_middleware_answers_preflight_for_same_host():
+    from fastapi.testclient import TestClient
+    c = TestClient(_cors_app(), base_url='http://nas:8000')
+    r = c.options('/ping', headers={'Origin': 'http://nas:3000',
+                                    'Access-Control-Request-Method': 'GET',
+                                    'Access-Control-Request-Headers': 'x-oasis-client'})
+    assert r.status_code == 200 and r.headers['access-control-allow-origin'] == 'http://nas:3000'
+
+
+def test_same_host_cors_is_off_by_default(monkeypatch):
+    assert not lan.same_host_cors_enabled()
+    monkeypatch.setenv('OASIS_CORS_SAME_HOST', '1')
+    assert lan.same_host_cors_enabled()
+
+
+# --- Chrome paths from the environment (containers) --------------------------
+
+def test_chrome_service_is_default_when_nothing_is_configured(monkeypatch):
+    import site_config
+    monkeypatch.delenv('CHROMEDRIVER_PATH', raising=False)
+    assert site_config.chrome_service() is None
+
+
+def test_chrome_service_honours_chromedriver_path(monkeypatch):
+    import site_config
+    monkeypatch.setenv('CHROMEDRIVER_PATH', '/usr/bin/chromedriver')
+    svc = site_config.chrome_service()
+    assert svc is not None and svc.path == '/usr/bin/chromedriver'
+
+
+def test_chrome_bin_sets_the_browser_binary(monkeypatch):
+    import site_config
+    from selenium.webdriver.chrome.options import Options
+    monkeypatch.setenv('CHROME_BIN', '/usr/bin/chromium')
+    opts = site_config.setup_driver_for_site(Options(), {})
+    assert opts.binary_location == '/usr/bin/chromium'
+    monkeypatch.delenv('CHROME_BIN')
+    assert not site_config.setup_driver_for_site(Options(), {}).binary_location
