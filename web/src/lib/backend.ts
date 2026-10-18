@@ -12,11 +12,32 @@ function normalize(url: string): string {
   return url.trim().replace(/\/+$/, "");
 }
 
+// When this page itself was opened over plain http at a non-loopback address
+// (http://192.168.1.20:3000 on a phone, via `oasis-portal --lan`), "localhost"
+// would be the phone, not the PC. The backend lives on the same host as the
+// page, port 8000, so default to that. Never applied to https pages: those are
+// the public site, whose backend is localhost or a tunnel the user types in.
+function sameHostBackend(): string | null {
+  if (typeof window === "undefined") return null;
+  const { protocol, hostname } = window.location;
+  if (protocol !== "http:" || !hostname || isLoopbackUrl(`http://${hostname}`)) return null;
+  const host = hostname.includes(":") ? `[${hostname.replace(/^\[|\]$/g, "")}]` : hostname;
+  return `http://${host}:8000`;
+}
+
 // Resolve the backend base URL for browser fetches.
 export function getBackendUrl(): string {
   if (typeof window !== "undefined") {
-    const stored = window.localStorage.getItem(STORAGE_KEY);
-    if (stored) return normalize(stored);
+    try {
+      const stored = window.localStorage.getItem(STORAGE_KEY);
+      if (stored) return normalize(stored);
+    } catch {
+      // Storage can throw (private mode, blocked site data); fall through.
+    }
+    if (!process.env.NEXT_PUBLIC_BACKEND_URL) {
+      const lan = sameHostBackend();
+      if (lan) return lan;
+    }
   }
   return normalize(DEFAULT_BACKEND_URL);
 }

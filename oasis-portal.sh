@@ -21,9 +21,17 @@ cd "$PROJECT_ROOT"
 # Run only the backend (for users of the public website who host the API
 # locally and don't need the frontend on their machine): ./oasis-portal.sh --backend-only
 BACKEND_ONLY=0
-if [ "$1" = "--backend-only" ]; then
-    BACKEND_ONLY=1
-fi
+# Let other devices on the same Wi-Fi/LAN (a phone) reach this machine:
+# ./oasis-portal.sh --lan. Listening on the network does not make anyone trusted --
+# every non-local request still needs the access code (settings -> remote access).
+LAN=0
+for arg in "$@"; do
+    case "$arg" in
+        --backend-only) BACKEND_ONLY=1 ;;
+        --lan) LAN=1 ;;
+        *) echo "Unknown option: $arg (supported: --backend-only, --lan)"; exit 2 ;;
+    esac
+done
 
 VENV_DIR="./oasis"
 PYTHON="$VENV_DIR/bin/python"
@@ -294,6 +302,16 @@ free_stale_port() {                # free_stale_port <port> <label> <grep-patter
 
 free_stale_port 8000 "後端 (uvicorn)" "uvicorn.*api:app"
 
+if [ "$LAN" = "1" ]; then
+    export OASIS_LAN=1
+    BIND_HOST=0.0.0.0
+    # Read by the backend's startup banner, which prints the URL to open on a phone.
+    if [ "$BACKEND_ONLY" != "1" ]; then export OASIS_FRONTEND_PORT=3000; fi
+    echo "  📶 LAN mode: also listening on the local network (access code required)."
+else
+    BIND_HOST=127.0.0.1
+fi
+
 echo "  🟢 FastAPI backend  → http://localhost:8000"
 # No --reload: this is the end-user launcher, and auto-reload restarts the
 # server (wiping the in-memory download queue) whenever a .py file changes,
@@ -301,7 +319,7 @@ echo "  🟢 FastAPI backend  → http://localhost:8000"
 # omits it too. (Interrupted downloads still resume from the DB on the next
 # start via the download_pending flag; for live code editing run uvicorn with
 # --reload manually — see README.)
-"$PYTHON" -m uvicorn api:app --app-dir backend --port 8000 &
+"$PYTHON" -m uvicorn api:app --app-dir backend --host "$BIND_HOST" --port 8000 &
 API_PID=$!
 
 if [ "$BACKEND_ONLY" = "1" ]; then

@@ -70,6 +70,18 @@ chmod +x oasis-portal.sh
 
 只想跑後端（例如你想自己架設給區網其他裝置連）可加參數：`./oasis-portal.sh --backend-only`。
 
+#### 📱 用手機（同一個 Wi-Fi）連線
+
+```bash
+./oasis-portal.sh --lan          # Windows：oasis-portal.bat -Lan
+```
+
+1. 到「設定 → 遠端存取」開啟遠端存取，取得存取碼（顯示在執行視窗）。
+2. 執行視窗會印出手機要打開的網址，例如 `http://192.168.1.20:3000`。
+3. 手機打開該網址，輸入存取碼即可。
+
+開放區網不代表信任區網：其他裝置一律需要存取碼。注意 https 的公開網站無法連到 http 的區網位址（瀏覽器的混合內容限制），所以手機要用 `--lan` 提供的網頁介面（原始碼版）。電腦換了 IP 需重啟。
+
 > 想改程式碼、新增站台 adapter，或想了解架構怎麼運作？看 [DEVELOPMENT.md](./DEVELOPMENT.md)。
 
 ---

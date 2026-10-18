@@ -6,6 +6,11 @@
 # So there is nothing to download or install on the user's machine except Google
 # Chrome (used by Selenium for downloads), which we check for below.
 
+# -Lan: also listen on the local network so a phone on the same Wi-Fi can connect.
+# Nobody on the network is trusted by that alone -- remote devices still need the
+# access code (settings -> remote access).
+param([switch]$Lan)
+
 $ScriptRoot = $PSScriptRoot
 if (-not $ScriptRoot) {
     $ScriptRoot = Get-Location
@@ -228,6 +233,13 @@ Write-Host "  Press Ctrl+C to shut down the server."
 Write-Host "======================================================"
 Write-Host ""
 
-& $PythonExe -m uvicorn api:app --app-dir (Join-Path $ScriptRoot "backend") --port 8000
+$BindHost = "127.0.0.1"
+if ($Lan) {
+    $env:OASIS_LAN = "1"
+    $BindHost = "0.0.0.0"
+    Write-Host "  LAN mode: also listening on the local network (access code required)." -ForegroundColor Yellow
+}
+
+& $PythonExe -m uvicorn api:app --app-dir (Join-Path $ScriptRoot "backend") --host $BindHost --port 8000
 
 Read-Host "Press Enter to exit"

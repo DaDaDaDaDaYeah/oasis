@@ -537,6 +537,23 @@ def test_stream_byte_ranges(media, local, rng, start, end):
     assert r.headers['content-range'] == f'bytes {start}-{end}/{len(data)}'
 
 
+def test_a_symlink_out_of_media_root_is_not_followed(media, local, tmp_path_factory):
+    """A lexical prefix check passes movies/evil.mp4 even when it is a symlink to a
+    file outside MEDIA_ROOT; stream, open-target and delete must all refuse it."""
+    outside = tmp_path_factory.mktemp('outside') / 'secret.mp4'
+    outside.write_bytes(b'top secret')
+    link = media / 'movies' / 'evil.mp4'
+    link.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        link.symlink_to(outside)
+    except (OSError, NotImplementedError):
+        pytest.skip('symlinks unavailable on this platform')
+    vid = add_video(video_path='movies/evil.mp4')
+    assert local.get(f'/api/stream/{vid}').status_code == 404
+    assert local.delete(f'/api/videos/{vid}?local_only=true').status_code == 200
+    assert outside.exists(), 'delete must not remove a file outside MEDIA_ROOT'
+
+
 def test_stream_unknown_video_and_missing_file(media, local):
     assert local.get('/api/stream/999').status_code == 404
     vid = add_video(video_path='movies/gone.mp4')
@@ -550,27 +567,49 @@ def test_stream_filename_is_url_encoded_in_the_header(media, local):
     assert "filename*=utf-8''" in disposition and '標' not in disposition
 
 
-@pytest.mark.xfail(strict=True, reason='Known gap: a suffix range ("last N bytes") is read as 0-N')
 def test_stream_suffix_range_means_the_last_n_bytes(media, local):
     rel, data = media_file(media)
     vid = add_video(video_path=rel)
     r = local.get(f'/api/stream/{vid}', headers={'Range': 'bytes=-10'})
     assert r.status_code == 206 and r.content == data[-10:]
+    assert r.headers['content-range'] == f'bytes {len(data) - 10}-{len(data) - 1}/{len(data)}'
 
 
-@pytest.mark.xfail(strict=True, reason='Known gap: a range starting past EOF should be 416, not an empty 206')
-def test_stream_range_past_the_end_is_416(media, local):
+def test_stream_suffix_longer_than_the_file_returns_the_whole_file(media, local):
     rel, data = media_file(media)
     vid = add_video(video_path=rel)
-    assert local.get(f'/api/stream/{vid}', headers={'Range': f'bytes={len(data) + 50}-'}).status_code == 416
+    r = local.get(f'/api/stream/{vid}', headers={'Range': f'bytes=-{len(data) + 500}'})
+    assert r.status_code == 206 and r.content == data
 
 
-@pytest.mark.xfail(strict=True, reason='Known gap: a malformed Range header raises a 500 instead of being ignored/416')
-def test_stream_malformed_range_is_not_a_server_error(media):
-    rel, _ = media_file(media)
+def test_stream_end_past_eof_is_clamped(media, local):
+    rel, data = media_file(media)
+    vid = add_video(video_path=rel)
+    r = local.get(f'/api/stream/{vid}', headers={'Range': f'bytes=990-{len(data) + 500}'})
+    assert r.status_code == 206 and r.content == data[990:]
+    assert r.headers['content-range'] == f'bytes 990-{len(data) - 1}/{len(data)}'
+
+
+@pytest.mark.parametrize('rng', ['bytes={n}-', 'bytes={n}-{m}', 'bytes=-0'])
+def test_stream_unsatisfiable_range_is_416(media, local, rng):
+    rel, data = media_file(media)
+    vid = add_video(video_path=rel)
+    r = local.get(f'/api/stream/{vid}', headers={'Range': rng.format(n=len(data) + 50, m=len(data) + 60)})
+    assert r.status_code == 416
+    assert r.headers['content-range'] == f'bytes */{len(data)}'
+
+
+@pytest.mark.parametrize('rng', [
+    'bytes=abc-', 'bytes=-', 'bytes=5', 'bytes=9-3', 'bytes=--5', 'bytes=1-2-3',
+    'items=0-9', 'garbage', 'bytes=0-9,20-29',
+])
+def test_stream_unusable_range_is_ignored_not_a_server_error(media, rng):
+    """A header we cannot honour falls back to the whole file (RFC 9110), never a 500."""
+    rel, data = media_file(media)
     vid = add_video(video_path=rel)
     c = make_client('local', raise_server_exceptions=False)
-    assert c.get(f'/api/stream/{vid}', headers={'Range': 'bytes=abc-'}).status_code < 500
+    r = c.get(f'/api/stream/{vid}', headers={'Range': rng})
+    assert r.status_code == 200 and r.content == data
 
 
 # =============================================================================

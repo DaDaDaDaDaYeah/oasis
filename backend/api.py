@@ -21,6 +21,7 @@ import time
 import urllib.parse
 import requests
 
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request, Depends, Query, BackgroundTasks
 from fastapi.responses import StreamingResponse, JSONResponse, Response, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -38,10 +39,22 @@ sys.path.insert(0, PROJECT_ROOT)
 import auth
 import catalog
 import db_setup
+import lan
 import site_config
 import version
 
-app = FastAPI(title='OASIS API')
+@asynccontextmanager
+async def _lifespan(_app):
+    # Replaces the deprecated @app.on_event hooks. _init_db is synchronous and runs
+    # on the event loop (it schedules the background tasks), exactly as before.
+    _init_db()
+    try:
+        yield
+    finally:
+        _cleanup_processes()
+
+
+app = FastAPI(title='OASIS API', lifespan=_lifespan)
 
 # The frontend is a public website that calls this local backend directly from
 # the browser, so only allow the deployed site's origin (plus localhost for dev).
@@ -53,9 +66,15 @@ ALLOWED_ORIGINS = [
     if o.strip()
 ]
 
+# LAN mode (opt-in; see lan.py) also admits a page served from this machine's own
+# LAN addresses, i.e. the web UI the portal serves on :3000 and opens on a phone.
+# Computed once at start: restart after the machine's IP changes.
+_LAN_ORIGIN_REGEX = lan.lan_origin_regex() if lan.lan_enabled() else None
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
+    allow_origin_regex=_LAN_ORIGIN_REGEX,
     allow_methods=['*'],
     allow_headers=['*'],
 )
@@ -182,7 +201,6 @@ async def require_auth(request: Request, call_next):
     return await call_next(request)
 
 
-@app.on_event('startup')
 def _init_db():
     """Ensure the SQLite database and tables exist (safe to call repeatedly)."""
     # Single source of truth for the "server is up" banner: this hook is the one
@@ -196,7 +214,7 @@ def _init_db():
     # means, so the headline is an instruction ("open this website"), not a
     # status report -- the technical host/port/dir facts are demoted to a
     # second block for support/debugging, not what the user is meant to read.
-    host = os.environ.get('HOST', '127.0.0.1')
+    host = lan.bind_host()
     port = os.environ.get('PORT', '8000')
     print('')
     print('======================================================')
@@ -226,12 +244,30 @@ def _init_db():
     auth.print_code()
     if not auth.has_code():
         print('   若要用手機看片，請在「設定 → 遠端存取」開啟遠端存取。')
+    _print_lan_help(port)
     _resume_pending_downloads()
     asyncio.create_task(_bg_check_analyses())
     asyncio.create_task(_backfill_covers())
 
 
-@app.on_event('shutdown')
+def _print_lan_help(port) -> None:
+    """Tell the user what to type on a phone. Printed only in LAN mode."""
+    if not lan.lan_enabled():
+        return
+    urls = lan.describe_urls(port, os.environ.get('OASIS_FRONTEND_PORT'))
+    print('📱 區域網路（同一個 Wi-Fi）已開放，手機請打開：')
+    if not urls:
+        print('   （找不到這台電腦的區域網路位址，請確認已連上 Wi-Fi / 網路線）')
+    for label, url in urls:
+        print(f'   {label}：{url}')
+    if not auth.has_code():
+        print('   ⚠️ 遠端存取尚未開啟，手機會被拒絕——請先在「設定 → 遠端存取」開啟並取得存取碼。')
+    if not any(label == '網頁介面' for label, _ in urls):
+        print('   註：https 的公開網站無法連到 http 的區域網路位址（瀏覽器的混合內容限制），')
+        print('   手機請改用 `oasis-portal --lan` 提供的網頁介面，或使用 tunnel。')
+    print('')
+
+
 def _cleanup_processes():
     """Terminate any lingering child processes and close their queues on a clean
     server shutdown. Without this, every unfinished analysis leaves a
@@ -986,8 +1022,12 @@ def _resolve_local_file(video_path: str | None) -> str | None:
     is missing or escapes MEDIA_ROOT."""
     if not video_path:
         return None
-    abs_path = os.path.abspath(os.path.join(MEDIA_ROOT, video_path))
-    if abs_path.startswith(MEDIA_ROOT + os.sep) and os.path.isfile(abs_path):
+    # realpath, not abspath: a symlink under movies/ that points outside
+    # MEDIA_ROOT passes a purely lexical prefix check and would let a stream,
+    # open or delete reach an arbitrary file.
+    root = os.path.realpath(MEDIA_ROOT)
+    abs_path = os.path.realpath(os.path.join(root, video_path))
+    if abs_path.startswith(root + os.sep) and os.path.isfile(abs_path):
         return abs_path
     return None
 
@@ -1200,14 +1240,12 @@ def remove_series(series_id: int, delete_videos: bool = False):
             if _is_downloading(v['id']):
                 raise HTTPException(status_code=409, detail=f"系列中的影片「{v.get('title')}」正在下載中，請待完成後再刪除")
         for v in videos:
-            rel_path = v.get('video_path')
-            if rel_path:
-                abs_path = os.path.abspath(os.path.join(MEDIA_ROOT, rel_path))
-                if abs_path.startswith(MEDIA_ROOT + os.sep) and os.path.isfile(abs_path):
-                    try:
-                        os.remove(abs_path)
-                    except OSError as e:
-                        print(f"Failed to remove video file {abs_path}: {e}")
+            abs_path = _resolve_local_file(v.get('video_path'))
+            if abs_path:
+                try:
+                    os.remove(abs_path)
+                except OSError as e:
+                    print(f"Failed to remove video file {abs_path}: {e}")
             catalog.delete_video(v['id'])
 
     if not catalog.delete_series(series_id):
@@ -1298,9 +1336,8 @@ def open_in_player(video_id: int):
     if not record:
         raise HTTPException(status_code=404, detail='影片不存在')
 
-    rel_path = record.get('video_path')
-    abs_path = os.path.abspath(os.path.join(MEDIA_ROOT, rel_path)) if rel_path else None
-    if not abs_path or not abs_path.startswith(MEDIA_ROOT + os.sep) or not os.path.isfile(abs_path):
+    abs_path = _resolve_local_file(record.get('video_path'))
+    if not abs_path:
         raise HTTPException(status_code=404, detail='本地影片檔案不存在')
 
     import subprocess
@@ -1337,16 +1374,13 @@ def delete_video(video_id: int, local_only: bool = False):
         raise HTTPException(status_code=409, detail='下載進行中，請待完成後再刪除')
 
     deleted_file = False
-    rel_path = record.get('video_path')
-    if rel_path:
-        # Resolve under PROJECT_ROOT and guard against path traversal.
-        abs_path = os.path.abspath(os.path.join(MEDIA_ROOT, rel_path))
-        if abs_path.startswith(MEDIA_ROOT + os.sep) and os.path.isfile(abs_path):
-            try:
-                os.remove(abs_path)
-                deleted_file = True
-            except OSError as e:
-                raise HTTPException(status_code=500, detail=f'刪除檔案失敗: {e}')
+    abs_path = _resolve_local_file(record.get('video_path'))
+    if abs_path:
+        try:
+            os.remove(abs_path)
+            deleted_file = True
+        except OSError as e:
+            raise HTTPException(status_code=500, detail=f'刪除檔案失敗: {e}')
 
     if local_only:
         catalog.clear_video_path(video_id)
@@ -1548,6 +1582,46 @@ def stream_online_video(video_id: int, request: Request):
     raise HTTPException(status_code=400, detail='此網站不支援線上串流播放')
 
 
+_UNSATISFIABLE = object()
+
+
+def _parse_byte_range(header: str, size: int):
+    """Parse a single-range ``Range: bytes=...`` header against a file of *size*.
+
+    Returns ``(start, end)`` inclusive, ``None`` when the header should be ignored
+    (wrong unit, malformed, or several ranges -- the caller then serves the whole
+    file), or ``_UNSATISFIABLE`` when it is valid but falls outside the file.
+    """
+    unit, _, spec = header.partition('=')
+    if unit.strip().lower() != 'bytes' or ',' in spec:
+        return None
+    first, dash, last = spec.strip().partition('-')
+    if not dash:
+        return None
+    first, last = first.strip(), last.strip()
+    try:
+        if not first:                       # suffix: the last N bytes
+            if not last:
+                return None
+            n = int(last)
+            if n < 0 or not last.isdigit():
+                return None
+            if n == 0 or size == 0:
+                return _UNSATISFIABLE
+            return max(size - n, 0), size - 1
+        if not first.isdigit() or (last and not last.isdigit()):
+            return None
+        start = int(first)
+        end = int(last) if last else None
+    except ValueError:
+        return None
+    if end is not None and end < start:
+        return None                         # syntactically invalid -> ignore
+    if start >= size:
+        return _UNSATISFIABLE
+    return start, size - 1 if end is None else min(end, size - 1)
+
+
 @app.get('/api/stream/{video_id}')
 def stream_video(video_id: int, request: Request):
     """Stream a local video file by video ID."""
@@ -1558,14 +1632,8 @@ def stream_video(video_id: int, request: Request):
     # video_path is DB-supplied (and /api/import lets a caller write one), so it
     # has to be re-checked against MEDIA_ROOT here exactly as delete/open do —
     # otherwise a crafted "../../.." row turns this into an arbitrary file read.
-    rel_path = record.get('video_path')
-    video_path = os.path.abspath(os.path.join(MEDIA_ROOT, rel_path)) if rel_path else None
-
-    if (
-        not video_path
-        or not video_path.startswith(MEDIA_ROOT + os.sep)
-        or not os.path.isfile(video_path)
-    ):
+    video_path = _resolve_local_file(record.get('video_path'))
+    if not video_path:
         raise HTTPException(status_code=404, detail='本地影片檔案不存在')
 
     file_size = os.path.getsize(video_path)
@@ -1573,14 +1641,20 @@ def stream_video(video_id: int, request: Request):
     import urllib.parse
     encoded_filename = urllib.parse.quote(filename)
 
+    # A Range header we cannot honour is ignored (full 200), per RFC 9110; one we
+    # understand but cannot satisfy is a 416. Never a 500: browsers and phone
+    # players send odd Range headers, and a crash here kills playback.
     range_header = request.headers.get('range')
-    if range_header:
-        byte_range = range_header.replace('bytes=', '').split('-')
-        start = int(byte_range[0]) if byte_range[0] else 0
-        end = int(byte_range[1]) if len(byte_range) > 1 and byte_range[1] else file_size - 1
+    byte_range = _parse_byte_range(range_header, file_size) if range_header else None
+    if byte_range is _UNSATISFIABLE:
+        return Response(
+            status_code=416,
+            headers={'Content-Range': f'bytes */{file_size}', 'Accept-Ranges': 'bytes'},
+        )
+    if byte_range is None:
+        start, end = 0, file_size - 1
     else:
-        start = 0
-        end = file_size - 1
+        start, end = byte_range
 
     length = end - start + 1
 
@@ -1602,7 +1676,7 @@ def stream_video(video_id: int, request: Request):
         'Accept-Ranges': 'bytes',
     }
 
-    if range_header:
+    if byte_range is not None:
         headers['Content-Range'] = f'bytes {start}-{end}/{file_size}'
         status_code = 206
     else:

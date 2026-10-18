@@ -45,7 +45,7 @@ cd backend && python -m pytest          # CI runs the same via .github/workflows
 - `backend/tests/conftest.py` points `DB_PATH`, `OASIS_MEDIA_ROOT` and `OASIS_SITES_DIR` at a temp dir **before** anything is imported (those modules read their env at import time) and the `db` / `auth_file` / `sites_dir` fixtures re-point the module attributes per test. A test must never be able to touch a real `oasis.db` or `oasis.auth.json`; use those fixtures instead of the module globals.
 - API tests use `TestClient`, but auth.py judges callers by peer address and `Host`, so they set the peer through the small `_Peer` ASGI wrapper in `test_api.py` (this Starlette's `TestClient` hard-codes it). The startup hook is intentionally never run.
 - The suite is mutation-checked: the auth/path-guard/adapter-matching/download-integrity tests were verified to fail when the guard they cover is removed. When you change one of those guards, change its test with it rather than loosening it.
-- Tests marked `xfail(strict=True)` document **known defects** (currently the `/api/stream` `Range` handling: suffix ranges, ranges past EOF, malformed headers). Fixing the bug makes the strict xfail fail — delete the marker in the same change.
+- If you find a defect you are not fixing in the same change, pin it with an `xfail(strict=True)` test (it then fails loudly the day it is fixed, prompting you to delete the marker). There are none at the moment: the `/api/stream` `Range` handling (`_parse_byte_range`) was the last.
 - Not covered: anything needing a real browser or FFmpeg (`download.py`, `encode.py`, `merge.py`, the Selenium paths in `catalog.process_url` / `process_listing_url`), `updater.py`, and `run_backend.py`.
 
 ## Architecture
@@ -59,6 +59,8 @@ Because the page is HTTPS and the backend is plain HTTP on localhost (browsers e
 - **CORS allowlist** — `ALLOWED_ORIGINS` (default: `localhost:3000` + the deployed site).
 - **`X-Oasis-Client: 1` header** — required on every `/api/*` call by a middleware in `api.py`. It is a public, fixed value, not a secret: requiring a *custom* header forces a CORS preflight, which the backend only answers for allowed origins. That closes CSRF on side-effecting endpoints like `/api/videos/{id}/open` (which launches a local player). `/api/stream/*` is exempt, since `<video src>` cannot send custom headers.
 - **Access code** (`auth.py`) — the actual authentication. Neither guard above survives contact with a non-browser: `curl -H 'X-Oasis-Client: 1'` ignores CORS entirely, which is a total compromise the moment a user tunnels the backend (ngrok & co.) to watch from their phone.
+
+**LAN mode** (`OASIS_LAN=1`, `oasis-portal.sh --lan`, or a non-loopback `HOST`; helpers in `lan.py`) only changes where the backend *listens*, what the startup banner prints for a phone, and adds CORS for this machine's *own* LAN addresses. It grants no trust: a LAN request has a non-loopback `Host`/peer, so it is never local and needs the code. Don't widen the CORS regex to "any private IP" — that would let any page served from any device in the house call the owner's backend. Remember an `https` page cannot call an `http://192.168.x.x` backend (mixed content), which is why the portal's own `:3000` UI, whose `getBackendUrl()` defaults to the same host on `:8000`, is the phone path. `run_backend.py` is untouched on purpose: editing it changes the `RUNTIME` fingerprint.
 
 Any new `/api/*` endpoint inherits all three automatically; any new frontend call must go through `backendFetch()` in `web/src/lib/api.ts`, never a bare `fetch`.
 

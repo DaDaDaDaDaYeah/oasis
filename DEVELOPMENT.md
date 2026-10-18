@@ -78,6 +78,7 @@ Light 更新失敗不會動到硬碟上任何東西，會自動退回走 Full；
   ./oasis-portal.sh --backend-only
   ```
 - 環境變數 `ALLOWED_ORIGINS` 可設定 CORS 網域限制。預設為 `http://localhost:3000` 以及部署的網站。
+- **區網模式**：`./oasis-portal.sh --lan`（Windows：`-Lan`），或設定 `OASIS_LAN=1` / 非 loopback 的 `HOST`（例如打包版 `HOST=0.0.0.0`）。後端改聽 `0.0.0.0`，啟動訊息會印出手機要打開的網址，CORS 另外放行「本機自己的區網位址」（`backend/lan.py`；不是整個私有網段）。不改變信任模型：從網路來的請求永遠不是本機，仍需存取碼。
 
 ### 前端環境變數 (Frontend Next.js)
 在 `web/` 目錄中，可以建立 `.env.local` 檔案來自訂變數：
