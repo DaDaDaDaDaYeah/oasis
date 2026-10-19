@@ -19,6 +19,7 @@ docker compose logs api       # 找到「存取碼： XXXX-XXXX」
 - **永遠需要存取碼。** Docker 的連接埠轉發會讓連本機瀏覽器看起來也像「遠端」，所以沒有「本機免密碼」這回事。存取碼在 `docker compose logs api` 裡；存在 `data/oasis.auth.json`，重開不會變。要換新的：刪掉 `data/oasis.auth.json` 後 `docker compose restart api`。
 - **資料都在 `./data`**（可用 `OASIS_DATA=/path/to/folder` 改位置）：`oasis.db`、`movies/`、`sites/`（你自己的 adapter 不會被覆蓋，內建的在每次啟動時更新）。備份就是複製這個資料夾。
 - **用 `http://<IP>:3000`，不要用公開網站。** https 的公開網站無法連到 http 的伺服器位址（瀏覽器的混合內容限制）。
+- **瀏覽器擴充功能**：在擴充功能的齒輪裡把後端網址設成 `http://<伺服器 IP>:8000`（擴充功能跟後端在同一台機器上也一樣，例如 Steam Deck 桌面模式用 `http://localhost:8000`），並填入存取碼——Docker 下每個連線都需要它。
 - **沒有「用本機播放器開啟」。** 那個功能會在後端所在的機器上開播放器，容器內做不到；用網頁內建播放器。
 - **封面圖檔**：封面存在 `oasis.db`，同時也會以同名圖檔寫進 `movies/`（`ABC-123.mp4` → `ABC-123.jpg`），既有的圖檔不會被覆蓋。
 - **權限**：容器以 UID/GID 1000 執行。你的帳號不是 1000 的話：`PUID=$(id -u) PGID=$(id -g) docker compose up -d`（或寫進 `.env`）。

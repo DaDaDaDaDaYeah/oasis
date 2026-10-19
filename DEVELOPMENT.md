@@ -25,6 +25,12 @@ graph TD
     Selenium --> |抓取影片網址與資訊| VideoSites[支援的影片來源網站]
 ```
 
+### 不需 adapter 的下載（擷取串流）
+
+參考 XDM：瀏覽器擴充功能（`chrome-extension/background.js`）監看分頁收到的回應，找出 HLS 播放清單、DASH 資訊清單與大型影片檔，連同 CDN 要看的標頭（Referer、Cookie、User-Agent…）列在彈出視窗。按「下載」會呼叫 `POST /api/capture`；後端用 `captures` 表記下串流網址與標頭並排入下載佇列。下載進程看到影片有 `captures` 記錄時改走 `capture_dl.py`，不開瀏覽器、不找 adapter。`/api/analyze` 收到沒有 adapter 的 `.m3u8` / `.mpd` / `.mp4` 網址時也走同一條路。
+
+兩道防護：標頭只轉送白名單內的幾個；遠端裝置（帶存取碼的手機、Docker 內所有連線）不能讓後端去抓內網位址，否則等於借後端讀取家中路由器之類只有這台機器碰得到的東西。DRM（DASH `ContentProtection`、HLS `SAMPLE-AES`）與直播串流一律拒絕。
+
 ---
 
 ## 🔄 軟體更新機制
@@ -96,7 +102,11 @@ oasis/
 ├── backend/                  # Python FastAPI 後端服務
 │   ├── api.py                # REST API 路由與進程管理
 │   ├── crawler.py            # TS 分段下載核心邏輯（HLS 路徑）
-│   ├── httpdl.py             # 單一檔案串流下載（漸進式 mp4 路徑，支援續傳）
+│   ├── httpdl.py             # 漸進式 mp4 下載：大檔多連線分段，各段可續傳
+│   ├── dash.py               # MPEG-DASH (.mpd) 解析、選軌、下載與 FFmpeg 合併
+│   ├── segments.py           # 平行、可續傳的片段下載（DASH 與擷取的 HLS 共用）
+│   ├── capture.py            # 擴充功能擷取的串流：登錄、標頭白名單、內網防護
+│   ├── capture_dl.py         # 擷取串流的下載（HLS / DASH / MP4，不需 adapter）
 │   ├── download.py           # Selenium 分析及下載流程（依 adapter 選 HLS／漸進式）
 │   ├── encode.py             # FFmpeg 轉檔模組
 │   ├── catalog.py            # 元數據刮削與 SQLite 資料庫操作

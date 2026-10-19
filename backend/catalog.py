@@ -351,6 +351,12 @@ def delete_video(video_id: int):
         return None
     conn = get_connection()
     conn.execute("DELETE FROM videos WHERE id = ?", (video_id,))
+    # No FOREIGN KEY (see db_setup), so a captured stream's row goes with it here;
+    # otherwise re-capturing the same stream would find the orphan and skip it.
+    try:
+        conn.execute("DELETE FROM captures WHERE video_id = ?", (video_id,))
+    except sqlite3.OperationalError:
+        pass  # table predates this database's last start
     conn.commit()
     conn.close()
     return record

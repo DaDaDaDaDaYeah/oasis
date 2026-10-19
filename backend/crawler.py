@@ -35,6 +35,12 @@ def is_stop_requested() -> bool:
     return _stop_event.is_set()
 
 
+def wait_stop(seconds: float) -> bool:
+    """Sleep up to `seconds`, waking early on a cancel. Retry pauses use this
+    rather than time.sleep so a cancel still tears a download down promptly."""
+    return _stop_event.wait(seconds)
+
+
 def _make_session(dl_headers: dict) -> requests.Session:
     session = requests.Session()
     adapter = HTTPAdapter(
@@ -87,8 +93,10 @@ def scrape(key, iv, folderPath, remaining, lock, session, total, progress_cb, st
     if os.path.exists(saveName):
         with lock:
             remaining.discard(url)
-            left = len(remaining)
-        _report_progress(progress_cb, total, left)
+            # Reported under the lock: outside it a thread that finished
+            # earlier could report its stale count last, so the bar would end
+            # on 9/10 even though every segment landed.
+            _report_progress(progress_cb, total, len(remaining))
         return True
     try:
         response = session.get(url, timeout=15)
@@ -111,8 +119,8 @@ def scrape(key, iv, folderPath, remaining, lock, session, total, progress_cb, st
             with lock:
                 remaining.discard(url)
                 left = len(remaining)
+                _report_progress(progress_cb, total, left)
             print(f'\r已完成: {url.split("/")[-1]}, 剩餘 {left} 個   ', end='', flush=True)
-            _report_progress(progress_cb, total, left)
             return True
         print(f'\n⚠️ HTTP {response.status_code}: {url}')
     except Exception as e:

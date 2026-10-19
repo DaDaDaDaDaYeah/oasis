@@ -40,9 +40,10 @@ function flash(message) {
   statusEl.textContent = message;
   statusEl.hidden = false;
   clearTimeout(flash._t);
+  // Error messages here run to a sentence or two; give them time to be read.
   flash._t = setTimeout(() => {
     statusEl.hidden = true;
-  }, 2000);
+  }, Math.max(2000, message.length * 120));
 }
 
 function formatDate(iso) {
@@ -157,9 +158,185 @@ hideBtn.addEventListener("click", async () => {
   render();
 });
 
+// --- Oasis backend + detected media ---------------------------------------
+//
+// The popup talks to the backend directly. host_permissions <all_urls> exempts
+// extension pages from CORS, which is why the backend needs no allow-list entry
+// for the extension's origin; it still sends X-Oasis-Client like every Oasis
+// client, and the access code when one is set (any backend not on this machine,
+// e.g. Docker, requires it).
+
+const BACKEND_KEY = "oasisBackend";
+const DEFAULT_BACKEND = "http://localhost:8000";
+
+const settingsEl = document.getElementById("settings");
+const backendUrlEl = document.getElementById("backendUrl");
+const accessCodeEl = document.getElementById("accessCode");
+const mediaView = document.getElementById("mediaView");
+const mediaList = document.getElementById("mediaList");
+
+async function getBackend() {
+  const data = (await chrome.storage.local.get(BACKEND_KEY))[BACKEND_KEY] || {};
+  return { url: (data.url || DEFAULT_BACKEND).replace(/\/+$/, ""), code: data.code || "" };
+}
+
+async function backendFetch(path, options = {}) {
+  const { url, code } = await getBackend();
+  const headers = { "X-Oasis-Client": "1", ...(options.headers || {}) };
+  if (code) headers.Authorization = `Bearer ${code}`;
+  return fetch(url + path, { ...options, headers });
+}
+
+function errorText(status, body) {
+  if (body && body.code_required) return "後端未開放遠端存取：請在 Oasis 設定開啟遠端存取，或改用本機後端。";
+  if (status === 401) return "需要存取碼：請按右上角齒輪輸入。";
+  return (body && body.detail) || `後端回應錯誤 (${status})`;
+}
+
+function formatSize(bytes) {
+  if (!bytes) return "";
+  const mb = bytes / 1024 / 1024;
+  return mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${mb.toFixed(1)} MB`;
+}
+
+function displayName(url) {
+  try {
+    const u = new URL(url);
+    const last = decodeURIComponent(u.pathname.slice(u.pathname.lastIndexOf("/") + 1));
+    return `${u.hostname} · ${last || u.pathname}`;
+  } catch {
+    return url;
+  }
+}
+
+async function currentTab() {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  return tab;
+}
+
+async function renderMedia() {
+  const tab = await currentTab();
+  if (!tab) return;
+  const k = `media:${tab.id}`;
+  const items = (await chrome.storage.session.get(k))[k] || [];
+  mediaView.hidden = items.length === 0;
+  mediaList.textContent = "";
+  // Manifests first: one of them is the whole video, where a progressive hit
+  // can still be a preview clip.
+  const rank = { hls: 0, dash: 0, http: 1 };
+  items
+    .slice()
+    .sort((a, b) => rank[a.kind] - rank[b.kind] || a.seenAt - b.seenAt)
+    .forEach((item) => {
+      const li = document.createElement("li");
+      li.className = "item media-item";
+
+      const main = document.createElement("div");
+      main.className = "item-main";
+      const name = document.createElement("div");
+      name.className = "media-name";
+      name.textContent = displayName(item.url);
+      name.title = item.url;
+      const meta = document.createElement("div");
+      meta.className = "media-meta";
+      const kind = document.createElement("span");
+      kind.className = "kind";
+      kind.textContent = { hls: "HLS", dash: "DASH", http: "MP4" }[item.kind] || item.kind;
+      meta.append(kind);
+      const size = formatSize(item.size);
+      if (size) meta.append(size);
+      main.append(name, meta);
+
+      const send = document.createElement("button");
+      send.type = "button";
+      send.textContent = "下載";
+      send.addEventListener("click", () => sendToOasis(item, tab, send));
+
+      li.append(main, send);
+      mediaList.append(li);
+    });
+}
+
+async function sendToOasis(item, tab, button) {
+  button.disabled = true;
+  try {
+    const res = await backendFetch("/api/capture", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        page_url: tab.url,
+        title: tab.title || "",
+        media_url: item.url,
+        kind: item.kind,
+        content_type: item.contentType || null,
+        // A request with no Referer of its own was made from this page; most
+        // hotlink checks want to see it.
+        headers: { Referer: tab.url, ...item.headers },
+        download: true,
+      }),
+    });
+    let body = null;
+    try { body = await res.json(); } catch {}
+    if (!res.ok) {
+      flash(errorText(res.status, body));
+      button.disabled = false;
+      return;
+    }
+    if (body.status === "exists" && !body.download_started) flash("這部影片已在 Oasis 片庫中。");
+    else flash("已送到 Oasis，開始下載。");
+    button.textContent = "已送出";
+  } catch {
+    flash("連不到 Oasis 後端：請確認它正在執行，以及齒輪內的網址。");
+    button.disabled = false;
+  }
+}
+
+document.getElementById("settingsBtn").addEventListener("click", async () => {
+  settingsEl.hidden = !settingsEl.hidden;
+  if (!settingsEl.hidden) {
+    const { url, code } = await getBackend();
+    backendUrlEl.value = url;
+    accessCodeEl.value = code;
+  }
+});
+
+document.getElementById("saveSettings").addEventListener("click", async () => {
+  const url = backendUrlEl.value.trim() || DEFAULT_BACKEND;
+  if (!/^https?:\/\//.test(url)) {
+    flash("後端網址需以 http:// 或 https:// 開頭。");
+    return;
+  }
+  await chrome.storage.local.set({ [BACKEND_KEY]: { url, code: accessCodeEl.value.trim() } });
+  flash("已儲存。");
+  settingsEl.hidden = true;
+});
+
+document.getElementById("testBackend").addEventListener("click", async () => {
+  // Test what is typed, not what is saved, so a typo shows up before saving.
+  const url = (backendUrlEl.value.trim() || DEFAULT_BACKEND).replace(/\/+$/, "");
+  const code = accessCodeEl.value.trim();
+  try {
+    const headers = { "X-Oasis-Client": "1" };
+    if (code) headers.Authorization = `Bearer ${code}`;
+    // /api/health answers everyone and says whether *this* caller is in, which
+    // tells "wrong code" apart from "remote access off" in one cheap call.
+    const res = await fetch(`${url}/api/health`, { headers });
+    let body = null;
+    try { body = await res.json(); } catch {}
+    if (!res.ok) flash(errorText(res.status, body));
+    else if (body.authenticated) flash("連線成功。");
+    else if (!body.code_set) flash("後端未開放遠端存取：請在 Oasis 設定開啟遠端存取。");
+    else flash(code ? "存取碼不正確。" : "需要存取碼。");
+  } catch {
+    flash("連不到這個網址。");
+  }
+});
+
 // Keep the view live if another window (e.g. incognito) changes the store.
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === "local" && (changes[STORAGE_KEY] || changes[HIDDEN_KEY])) render();
+  if (area === "session") renderMedia();
 });
 
 render();
+renderMedia();

@@ -22,6 +22,20 @@ from httpdl import download_file
 _active_driver = None
 _active_folder_path = None
 
+
+def movies_dir() -> str:
+  """movies/ under MEDIA_ROOT, created on demand.
+
+  Must honour OASIS_MEDIA_ROOT exactly as catalog.find_local_file does. This
+  used to be derived from __file__ alone, which agrees with it in a source
+  checkout and the frozen build but not in Docker: there the source is /app and
+  the media root /data, so downloads went to an unmounted, root-owned /movies
+  that the catalog never looks in."""
+  root = os.environ.get('OASIS_MEDIA_ROOT') or os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+  folder = os.path.join(root, 'movies')
+  os.makedirs(folder, exist_ok=True)
+  return folder
+
 def download(url, progress_cb=None):
   global _active_driver, _active_folder_path
 
@@ -49,11 +63,7 @@ def download(url, progress_cb=None):
   # 依 URL 選出對應的站台 adapter（使用者自備，見 backend/sites.example.json）
   adapter = detect_site(url)
 
-  # 建立影片資料夾（movies/ 位於 repo root，即 backend 的上一層）
-  media_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-  movies_folder = os.path.join(media_root, 'movies')
-  if not os.path.exists(movies_folder):
-      os.makedirs(movies_folder)
+  movies_folder = movies_dir()
 
   if adapter.get('id') == 'youtube':
       _download_youtube(url, adapter, movies_folder, _report)

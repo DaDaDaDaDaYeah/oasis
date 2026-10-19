@@ -99,6 +99,23 @@ def create_tables():
         conn.execute("ALTER TABLE series ADD COLUMN cover_type TEXT")
     except sqlite3.OperationalError:
         pass
+    # Media captured by the browser extension from a site with no adapter (see
+    # capture.py). Its own table rather than columns on `videos`: it is needed
+    # only to (re)run that one download, it is machine-local (export leaves it
+    # out, like video_path), and keeping it apart leaves every existing query
+    # and the export format untouched. Keyed by video id; capture.py deletes its
+    # row alongside the video since there is no FOREIGN KEY (see `series`).
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS captures (
+            video_id   INTEGER PRIMARY KEY,
+            page_url   TEXT NOT NULL,
+            media_url  TEXT NOT NULL,
+            kind       TEXT NOT NULL,
+            headers    TEXT,
+            created_at TEXT DEFAULT (datetime('now'))
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_captures_media ON captures (media_url)")
     conn.commit()
     conn.close()
     print(f'✅ 資料庫已初始化: {DB_PATH}')

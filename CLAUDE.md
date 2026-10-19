@@ -46,7 +46,7 @@ cd backend && python -m pytest          # CI runs the same via .github/workflows
 - API tests use `TestClient`, but auth.py judges callers by peer address and `Host`, so they set the peer through the small `_Peer` ASGI wrapper in `test_api.py` (this Starlette's `TestClient` hard-codes it). The startup hook is intentionally never run.
 - The suite is mutation-checked: the auth/path-guard/adapter-matching/download-integrity tests were verified to fail when the guard they cover is removed. When you change one of those guards, change its test with it rather than loosening it.
 - If you find a defect you are not fixing in the same change, pin it with an `xfail(strict=True)` test (it then fails loudly the day it is fixed, prompting you to delete the marker). There are none at the moment: the `/api/stream` `Range` handling (`_parse_byte_range`) was the last.
-- Not covered: anything needing a real browser or FFmpeg (`download.py`, `encode.py`, `merge.py`, the Selenium paths in `catalog.process_url` / `process_listing_url`), `updater.py`, and `run_backend.py`.
+- Not covered: the adapter pipeline (`download.py`, `encode.py`, `merge.py`, the Selenium paths in `catalog.process_url` / `process_listing_url`), `updater.py`, and `run_backend.py`. The captured-stream, DASH and split-download paths *are* covered end to end against a local server, with real FFmpeg when it is installed.
 
 ## Architecture
 
@@ -91,6 +91,8 @@ Scraping and downloading are heavy and blocking (Selenium, network I/O, FFmpeg),
 - **Analyses** run in parallel, keyed by `task_id` in `active_analyses`. One analysis yields a **list** of records, not one — a listing URL produces one per episode — and `_bg_check_analyses` queues each with **its own** URL, never the analysed one: a listing page's URL scrapes no video, and the download worker re-navigates to read the title and media source off the page it is handed.
 - **Downloads are serialised** — exactly one at a time, FIFO through `download_queue`. `_pump_downloads()` reaps the finished one and starts the next; it is driven by `_bg_check_analyses()`, an asyncio loop that ticks every second.
 
+`download.movies_dir()` resolves `movies/` from `OASIS_MEDIA_ROOT`, like `catalog.find_local_file`. It used to be derived from `__file__`, which only agrees outside Docker (there source is `/app`, media `/data`).
+
 Since worker processes cannot share memory with the API, IPC is done through the filesystem in `$TMPDIR/oasis_progress/`:
 
 - `{id}.txt` — the worker writes whole-percent progress; the API reads it back. Progress only ever moves **forward** (seeded from the existing file on resume) so a resumed download's bar never dips back to the setup phase's low value.
@@ -123,7 +125,22 @@ The download pipeline (`download.py`) branches on `media_mode(adapter)`. Both pa
 - **`hls` (default)**: Selenium extracts the m3u8 URL → `resolve_m3u8_to_stream` picks the highest-bandwidth variant from a master playlist → `crawler.py` fetches TS segments across 16 threads (AES-CBC decrypt when keyed, with a **fresh cipher per segment** — CBC is stateful and must never be shared across threads) → merge → FFmpeg remux → move into `movies/`. Percent: 1% setup, 3–95% segments, 96% merge, 98% encode, 100% done.
 - **`http`**: `get_media_source` resolves the URL + cookies → `httpdl.py` streams it to one file, resuming from a partial via a `Range` request (the same "keep what's on disk" contract the segment crawler has, so a plain shutdown resumes rather than restarts) → move into `movies/`. There is nothing to stitch and the source is already MP4, so merge and FFmpeg are skipped. Percent: 1% setup, 3–98% bytes, 100% done.
 
+`httpdl` splits a file of at least `2 × MIN_PART` (4 MB) into up to `CONNECTIONS` (8, `OASIS_HTTP_CONNECTIONS`) byte ranges fetched in parallel — the XDM technique, since CDNs cap per-connection throughput. The fresh request is always `Range: bytes=0-`: only a 206 with a `Content-Range` proves ranges work. Each range goes to `<dest>.partN` with the plan in `<dest>.parts.json`, so resume is per range; parts are stitched via a temp name and size-checked before `dest` exists. A ranged request answered with anything but 206 raises `_RangeUnsupported` and the whole download falls back to one stream after discarding the parts — never stitch a 200 into a part. A legacy single-stream partial (a `dest` with no `.parts.json`) keeps resuming single-stream.
+
 `httpdl` honours the crawler's cancel flag through `crawler.is_stop_requested()` — the download worker's SIGTERM handler calls `request_stop()` without knowing which pipeline is running. It **raises rather than returning short** on a cancel or a truncated response, because the caller's next step is to move the file into `movies/`, where a truncated file would look downloaded.
+
+### Captured streams (no adapter)
+
+The XDM model, alongside the adapter pipelines. The extension (`chrome-extension/background.js`) watches responses in every tab, classifies HLS/DASH manifests and ≥3 MB progressive video by Content-Type then extension (segments — `.ts`, `.m4s`, `video/mp2t`, `iso.segment` — are never offered), and records the request's Referer/Cookie/UA. It **never fetches** anything itself: manifest URLs are often single-use tokens, and probing one would burn it. The popup posts the pick to `POST /api/capture`, from `chrome-extension://` — host permissions exempt extension pages from CORS, so no origin is added to the allow-list; it still sends `X-Oasis-Client` and `Authorization: Bearer` like every client.
+
+- `capture.py` files the video (through `create_manual_video`, so codes are `MANUAL-n` unless the title carries a real one — an existing code re-uses that entry) and writes a `captures` row (video_id, media_url, kind, headers). Idempotent on `media_url`; a re-send refreshes the headers, since signed cookies rotate. Headers are **allow-listed** (Referer, Origin, User-Agent, Cookie, Accept-Language; no CR/LF). A **non-local** caller may not target a private/loopback/link-local address: the backend fetches the URL and then serves it back through `/api/stream`, so this would hand a remote device the owner's LAN. Local callers are exempt (they can reach it anyway).
+- `/api/analyze` routes a URL whose path ends in a stream extension *and* that no adapter claims to the same path (`_direct_media_record`), settled synchronously — for devices with no extension.
+- `_download_worker` checks `capture.get(video_id)` first and runs `capture_dl.download` instead of `download.download`; it returns the file's relative path, so `find_local_file` is skipped. The SIGTERM handler wipes `capture_dl._active_folder_path` on cancel like download's.
+- `capture_dl` HLS is a fuller client than the adapter path: separate audio renditions (muxed), fMP4 `EXT-X-MAP`, byte ranges, rotating keys, and the spec's default IV (media sequence number — wrong IVs only garble each segment's first 16 bytes and still probe as valid video, which is why it is pinned by a planning test, not end to end). Live playlists (no `ENDLIST`, not VOD), `SAMPLE-AES` and non-identity key formats are refused. An `http` capture is sniffed for an HTML error page (expired links often 200 one) before promotion.
+- `dash.py` handles static MPDs: SegmentTemplate (`$Number$`/`$Time$`/width, SegmentTimeline incl. `r=-1`), SegmentList (incl. byte ranges), SegmentBase/plain BaseURL, and the BaseURL chain. Best video by (height, bandwidth), best audio by bandwidth, longest Period. `ContentProtection` (DRM) and `type="dynamic"` are refused. `MAX_SEGMENTS` caps a runaway manifest. Muxing is `ffmpeg -c copy` and **raises** on failure.
+- `segments.py` is the shared fetcher for both: per-job byte range and AES key/IV, temp-file-then-rename (a half-written segment never counts as done on resume), retry rounds via `crawler.wait_stop`. `crawler.py` is left as-is for the adapter path.
+
+These are covered by real-server tests (`test_capture.py`, `test_dash.py`, `test_split_download.py`); the FFmpeg ones skip when FFmpeg is absent. The extension has no automated tests.
 
 ### Source checkout vs. frozen build
 

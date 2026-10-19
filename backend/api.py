@@ -744,6 +744,10 @@ def _download_worker(video_id: int, url: str):
         # the file from scratch.
         cancelled = os.path.exists(_cancel_marker_path(video_id))
         folder = getattr(dl, '_active_folder_path', None)
+        # A captured stream works in its own folder (capture_dl), not download's.
+        _cdl = sys.modules.get('capture_dl')
+        if not folder and _cdl is not None:
+            folder = getattr(_cdl, '_active_folder_path', None)
         if cancelled and folder and os.path.exists(folder):
             try:
                 shutil.rmtree(folder)
@@ -802,12 +806,23 @@ def _download_worker(video_id: int, url: str):
             except OSError:
                 pass
 
-        download.download(url, progress_cb=_write_progress)
+        # A stream captured by the extension has no adapter to scrape it with:
+        # capture_dl fetches the URL it recorded, and knows exactly where the
+        # file went, so the name-matching lookup below is not needed for it.
+        import capture as _capture
+        cap = _capture.get(video_id)
+        captured_path = None
+        if cap:
+            import capture_dl
+            record = _cat.get_video_by_id(video_id) or {'id': video_id, 'title': ''}
+            captured_path = capture_dl.download(record, cap, progress_cb=_write_progress)
+        else:
+            download.download(url, progress_cb=_write_progress)
 
         # Update the DB with the new local file path
         record = _cat.get_video_by_id(video_id)
         if record:
-            local_path = _cat.find_local_file(record['code'], record.get('title') or '')
+            local_path = captured_path or _cat.find_local_file(record['code'], record.get('title') or '')
             if local_path:
                 conn = _cat.get_connection()
                 conn.execute(
@@ -891,8 +906,87 @@ def _start_download(video_id: int, url: str):
     _pump_downloads()
 
 
+class CaptureRequest(BaseModel):
+    page_url: str = ''
+    media_url: str
+    title: str | None = None
+    kind: str | None = None          # 'hls' | 'dash' | 'http'; guessed when absent
+    content_type: str | None = None
+    headers: dict[str, str] = {}
+    cover: str | None = None
+    download: bool = True
+
+
+@app.post('/api/capture')
+def capture_media(body: CaptureRequest, request: Request):
+    """File a stream the browser extension caught playing on any site, and queue
+    its download. No adapter and no browser are involved (see capture.py)."""
+    import capture
+    try:
+        record, created = capture.create(
+            page_url=body.page_url,
+            media_url=body.media_url,
+            title=body.title,
+            kind=body.kind,
+            headers=body.headers,
+            cover=body.cover,
+            content_type=body.content_type,
+            allow_private=bool(getattr(request.state, 'local', False)),
+        )
+    except capture.CaptureError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    started = False
+    if body.download and not _resolve_local_file(record.get('video_path')):
+        if record.get('video_path'):
+            catalog.clear_video_path(record['id'])
+        _start_download(record['id'], record['url'])
+        started = True
+    record = catalog.get_video_by_id(record['id']) or record
+    return {
+        'status': 'created' if created else 'exists',
+        'download_started': started,
+        'record': _enrich_record(record),
+    }
+
+
+_DIRECT_MEDIA_EXTS = ('.m3u8', '.m3u', '.mpd', '.mp4', '.m4v', '.webm', '.mkv', '.mov')
+
+
+def _direct_media_record(url: str, request: Request, download: bool):
+    """File `url` as a captured stream when it is one, else None (normal analysis).
+
+    Only for a URL whose path names a stream *and* that no adapter claims: an
+    adapter's site keeps its own pipeline, which also scrapes title and cover."""
+    path = urllib.parse.urlsplit(url).path.lower()
+    if not path.endswith(_DIRECT_MEDIA_EXTS):
+        return None
+    try:
+        site_config.detect_site(url)
+        return None
+    except ValueError:
+        pass
+    import capture
+    stem = urllib.parse.unquote(path.rsplit('/', 1)[-1]).rsplit('.', 1)[0]
+    # A bare 'index' / 'master' / 'playlist' says nothing; name it after the host.
+    generic = {'index', 'master', 'playlist', 'manifest', 'video', 'stream', 'prog_index'}
+    title = stem if stem and stem not in generic else (urllib.parse.urlsplit(url).hostname or 'video')
+    try:
+        record, _ = capture.create(
+            page_url=url, media_url=url, title=title,
+            allow_private=bool(getattr(request.state, 'local', False)),
+        )
+    except ValueError as e:   # CaptureError included
+        raise HTTPException(status_code=400, detail=str(e))
+    if download and not _resolve_local_file(record.get('video_path')):
+        _start_download(record['id'], record['url'])
+    return record
+
+
 @app.post('/api/analyze')
-async def analyze(req: AnalyzeRequest):
+async def analyze(req: AnalyzeRequest, request: Request):
     """Scrape metadata for a URL, store it in SQLite, and return immediately."""
     url = (req.url or '').strip()
     if not url:
@@ -913,6 +1007,22 @@ async def analyze(req: AnalyzeRequest):
             "record": item.get("record"),
             "error": item.get("error")
         }
+
+    # A pasted stream URL (an .m3u8/.mpd/.mp4 copied from devtools, say) on a
+    # site no adapter covers goes the captured-media way: there is no page to
+    # scrape, only the stream. This is what gives devices that cannot run the
+    # extension — a phone, the Steam Deck's game mode — the same reach. It
+    # finishes synchronously, so it is filed already settled; the frontend's
+    # poller then sees an ordinary successful analysis.
+    direct = _direct_media_record(url, request, req.download)
+    if direct is not None:
+        active_analyses[task_id] = {
+            "process": None, "result_queue": None, "status": "success",
+            "record": direct, "records": [direct], "error": None,
+            "download": req.download, "url": url, "download_started": req.download,
+        }
+        return {"status": "success", "task_id": task_id, "record": direct, "id": direct['id'],
+                "ids": [direct['id']], "count": 1}
 
     result_queue = multiprocessing.Queue()
     proc = multiprocessing.Process(
