@@ -19,7 +19,12 @@ COPY requirements.txt .
 RUN pip install -r requirements.txt
 
 COPY . .
-RUN chmod +x docker-entrypoint.sh
+# The container runs as PUID:PGID, not root, so everything in /app must be readable
+# by other users and the entrypoint executable by them. COPY keeps the checkout's
+# modes: a repo cloned under a restrictive umask (some NAS shells, 077) arrives as
+# 600, and a bare `chmod +x` then yields 700 root-only -- "cannot open
+# ./docker-entrypoint.sh: Permission denied" in a restart loop.
+RUN chmod -R a+rX /app && chmod 755 docker-entrypoint.sh
 
 ENV CHROME_BIN=/usr/bin/chromium \
     CHROMEDRIVER_PATH=/usr/bin/chromedriver \
