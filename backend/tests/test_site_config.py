@@ -295,3 +295,38 @@ def test_cover_defaults_to_og_image_and_takes_first_url_in_value():
     adapter = {'cover': {'selectors': [{'css': '.hero', 'attr': 'style'}]}}
     assert site_config.get_cover_url(FakeDriver(styled), adapter) == 'https://c.test/b.jpg'
     assert site_config.get_cover_url(FakeDriver(), adapter) is None
+
+
+def test_missing_m3u8_reports_what_the_browser_saw(capsys):
+    class Driver:
+        current_url = 'https://example.test/cdn-cgi/challenge'
+        title = 'Just a moment...'
+
+        def find_element(self, by, sel):
+            return type('E', (), {'text': 'Checking if the site connection is secure\n\nverify you are human'})()
+
+        def execute_script(self, *a, **k):
+            return ''
+
+        page_source = ''
+
+    with pytest.raises(ValueError) as e:
+        site_config.get_m3u8_url(Driver(), {'id': 'x', 'name': 'X', 'm3u8': {'regexes': ['nomatch']}})
+    shown = capsys.readouterr().out
+    for needle in ('Just a moment', 'cdn-cgi/challenge', 'verify you are human'):
+        assert needle in str(e.value) and needle in shown
+
+
+def test_describe_page_never_raises():
+    class Broken:
+        @property
+        def title(self):
+            raise RuntimeError('chrome crashed')
+
+        current_url = 'u'
+
+        def find_element(self, *a):
+            raise RuntimeError('gone')
+
+    out = site_config.describe_page(Broken())
+    assert "標題='?'" in out and "內容='?'" in out

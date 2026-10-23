@@ -435,7 +435,29 @@ def get_m3u8_url(driver, adapter: dict):
             if found:
                 return found
 
-    raise ValueError(f'無法找到 m3u8 網址（{adapter.get("name", adapter.get("id"))}），請確認網址是否正確')
+    # Say what the browser actually landed on. "No m3u8" alone cannot tell a
+    # changed player from a Cloudflare challenge, a region block or a dead link,
+    # and in a container nobody can look at the window.
+    seen = describe_page(driver)
+    print(f'⚠️ 找不到 m3u8，瀏覽器看到的頁面：{seen}')
+    raise ValueError(f'無法找到 m3u8 網址（{adapter.get("name", adapter.get("id"))}），請確認網址是否正確。頁面：{seen}')
+
+
+def describe_page(driver, limit: int = 160) -> str:
+    """One line on the page the driver is on: final URL, <title> and the start of
+    the visible text. Never raises -- it runs while reporting another failure."""
+    parts = []
+    for label, getter in (
+        ('網址', lambda: driver.current_url),
+        ('標題', lambda: driver.title),
+        ('內容', lambda: driver.find_element('css selector', 'body').text),
+    ):
+        try:
+            value = ' '.join(str(getter() or '').split())[:limit]
+        except Exception:
+            value = '?'
+        parts.append(f'{label}={value!r}')
+    return ' '.join(parts)
 
 
 def get_request_headers(adapter: dict, video_page_url: str = ''):
