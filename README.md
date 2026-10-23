@@ -144,10 +144,13 @@ chmod +x oasis-portal.sh
 | [SupJav](https://supjav.com) | `supjav.*` | ✅ |
 | [XVideos](https://www.xvideos.com) | `xvideos.*` | ✅ |
 | [Anime1](https://anime1.me) | `anime1.me` | ✅ 支援整季批次 |
+| [X (Twitter)](https://x.com) | `x.com`, `twitter.com` | ✅ 貼貼文網址，用 yt-dlp 下載 |
 
 這些是隨版本內建的 adapter（`backend/sites/*.json`），可以直接貼網址自動解析番號、演員、標籤、封面並下載。
 
 **XVideos 的番號是自動編號**：該站的影片標題由上傳者自由填寫，沒有可用的番號，因此收藏庫會依加入順序自動給號（`XV-01`、`XV-02`⋯）。同一支影片重新分析仍會沿用原本的號碼，不會重複新增一筆。
+
+**X 貼文**：貼上含影片的貼文網址（`x.com/<帳號>/status/<id>`）即可，番號自動編為 `XP-01`、`XP-02`⋯，標題取自貼文內容。公開貼文直接可下載；需要登入才看得到的貼文（年齡限制內容等）要提供 cookies：用瀏覽器擴充功能（例如「Get cookies.txt LOCALLY」）在登入 X 的狀態下匯出 Netscape 格式的 `cookies.txt`，放進影片根目錄（Docker 就是 `data/cookies.txt`；也可用環境變數 `OASIS_COOKIES_FILE` 指定位置）。cookies 等同你的登入狀態，請只放在自己的機器上。X 常改版，下載失敗時先更新 yt-dlp（Docker：`docker compose build --no-cache api`）。
 
 **Anime1 支援整季批次**：貼上單集網址就只加那一集；貼上該部動畫的**分類頁**（例如 `anime1.me/category/<季度>/<動畫名>`），會一次把整季每一集都加進收藏庫，按「分析並下載」則全部排入下載佇列，逐集依序下載，每集可各自取消。
 

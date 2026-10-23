@@ -1006,23 +1006,31 @@ def fetch_page_metadata(url: str) -> tuple:
     strings from the DOM.
     """
     global _active_driver
-    from site_config import detect_site, get_cover_url, get_video_actress, get_video_name, get_video_tags, wait_for_page_load
+    from site_config import (detect_site, get_cover_url, get_video_actress, get_video_name, get_video_tags,
+                             uses_ytdlp, wait_for_page_load, ytdlp_options)
 
     adapter = detect_site(url)
 
-    if adapter.get('id') == 'youtube':
+    if uses_ytdlp(adapter):
         try:
             import yt_dlp
-            ydl_opts = {'quiet': True, 'no_warnings': True, 'noplaylist': True}
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            with yt_dlp.YoutubeDL(ytdlp_options()) as ydl:
                 info = ydl.extract_info(url, download=False)
+                # A post with several videos comes back as a playlist; the first is
+                # the one the URL points at.
+                if info and info.get('entries'):
+                    info = next((e for e in info['entries'] if e), None)
                 if info:
                     v_title = info.get('title') or ''
                     v_id = info.get('id')
-                    c_url = info.get('thumbnail') or (f'https://i.ytimg.com/vi/{v_id}/hqdefault.jpg' if v_id else None)
+                    c_url = info.get('thumbnail') or (f'https://i.ytimg.com/vi/{v_id}/hqdefault.jpg'
+                                                      if v_id and adapter.get('id') == 'youtube' else None)
                     r_tags = info.get('tags') or []
                     return v_title, r_tags, c_url, None
         except Exception as e:
+            if adapter.get('id') != 'youtube':
+                # No page to fall back to scraping: the adapter has no selectors.
+                raise ValueError(f'無法取得影片資訊（{adapter.get("name")}）：{e}') from e
             print(f'⚠️ yt-dlp 取得 YouTube 資訊失敗，退回 Selenium: {e}')
 
     dr = _start_scrape_driver(adapter)
@@ -1080,7 +1088,7 @@ def process_url(url: str, skip_download: bool = False):
 
     # Step 2: Extract metadata. The page's own cast label, when the adapter
     # scrapes one, beats guessing the name off the title's tail.
-    from site_config import detect_site, derive_code
+    from site_config import detect_site, derive_code, uses_ytdlp
     adapter = detect_site(url)
 
     if adapter.get('id') == 'youtube':
@@ -1090,7 +1098,9 @@ def process_url(url: str, skip_download: bool = False):
         code = (derive_code(url, adapter, full_title)
                 or next_adapter_sequence_code(adapter, url)
                 or extract_code(full_title))
-        actress = page_actress or extract_actress(full_title, code)
+        # A yt-dlp site's title is "<uploader> - <post text>": guessing a cast name
+        # off its tail would file the post's last words as an actress.
+        actress = page_actress or (None if uses_ytdlp(adapter) else extract_actress(full_title, code))
 
 
 

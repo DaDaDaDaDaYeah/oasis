@@ -62,6 +62,34 @@ def supported_sites() -> list[dict]:
     return out
 
 
+def uses_ytdlp(adapter: dict) -> bool:
+    """Does yt-dlp, not Selenium, fetch this site's metadata and video?
+
+    YouTube predates the flag and is kept as the id check; any other site opts in
+    with ``"downloader": "ytdlp"`` in its adapter. For sites whose players build
+    the stream out of page JavaScript and signed API calls (X), maintaining
+    selectors would be a losing race that yt-dlp's extractors already run."""
+    return adapter.get('id') == 'youtube' or adapter.get('downloader') == 'ytdlp'
+
+
+def ytdlp_options(**extra) -> dict:
+    """yt-dlp options shared by metadata and download.
+
+    A Netscape-format ``cookies.txt`` in the media root (``/data/cookies.txt`` in
+    Docker) or at ``$OASIS_COOKIES_FILE`` is passed through, which is how posts
+    that need a logged-in account (X's age-restricted ones) become reachable. It
+    is read, never written by us, and absent by default."""
+    opts = {'quiet': True, 'no_warnings': True, 'noplaylist': True}
+    root = os.environ.get('OASIS_MEDIA_ROOT') or os.path.abspath(
+        os.path.join(os.path.dirname(__file__), '..'))
+    for candidate in (os.environ.get('OASIS_COOKIES_FILE'), os.path.join(root, 'cookies.txt')):
+        if candidate and os.path.isfile(candidate):
+            opts['cookiefile'] = candidate
+            break
+    opts.update(extra)
+    return opts
+
+
 def detect_site(url: str) -> dict:
     """Return the adapter whose domain rules match the URL, else raise.
 

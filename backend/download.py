@@ -15,7 +15,7 @@ from site_config import (
     detect_site, get_video_name, get_m3u8_url,
     setup_driver_for_site, wait_for_page_load,
     get_request_headers, resolve_m3u8_to_stream, build_ts_url,
-    media_mode, get_media_source
+    media_mode, get_media_source, uses_ytdlp, ytdlp_options
 )
 from httpdl import download_file
 
@@ -65,9 +65,8 @@ def download(url, progress_cb=None):
 
   movies_folder = movies_dir()
 
-  if adapter.get('id') == 'youtube':
-      _download_youtube(url, adapter, movies_folder, _report)
-      return
+  if uses_ytdlp(adapter):
+      return _download_ytdlp(url, adapter, movies_folder, _report)
 
   # 'hls'（m3u8 + ts 片段，預設）或 'http'（單一漸進式檔案）
   mode = media_mode(adapter)
@@ -214,31 +213,41 @@ def download(url, progress_cb=None):
   print(f'✅ 影片已移至: {dst}')
 
 
-def _download_youtube(url, adapter, movies_folder, _report):
+def _download_ytdlp(url, adapter, movies_folder, _report):
+    """Download through yt-dlp (YouTube, X, ...). Returns the file's path relative
+    to MEDIA_ROOT -- the caller must not go looking for it by title, because the
+    stored title keeps characters (`"`, `?`) that the file name cannot."""
     import shutil
     import yt_dlp
     from site_config import _clean_filename
 
+    site = adapter.get('name') or adapter.get('id')
     _report(1)
-    print('偵測到站台: YouTube')
+    print(f'偵測到站台: {site}')
     print('正在下載影片: ' + url)
 
     # 1. Extract metadata to get video title
-    ydl_opts_info = {'quiet': True, 'no_warnings': True, 'noplaylist': True}
-    with yt_dlp.YoutubeDL(ydl_opts_info) as ydl:
+    with yt_dlp.YoutubeDL(ytdlp_options()) as ydl:
         info = ydl.extract_info(url, download=False)
+        if info and info.get('entries'):
+            info = next((e for e in info['entries'] if e), None)
         title = info.get('title') if info else None
 
-    video_name = _clean_filename(title or 'youtube_video')
+    # Posts can be long, multi-line and full of emoji; a file name is none of those.
+    video_name = _clean_filename(' '.join((title or '').split()))[:120].strip(' .') \
+        or f'{adapter.get("id")}_video'
     print(f'影片名稱: {video_name}')
 
+    media_root = os.path.dirname(movies_folder)
     if os.path.exists(os.path.join(movies_folder, f'{video_name}.mp4')):
         print('影片已存在, 跳過...')
         _report(100)
-        return
+        return os.path.relpath(os.path.join(movies_folder, f'{video_name}.mp4'), media_root)
 
     dir_path = os.path.join(movies_folder, video_name)
     os.makedirs(dir_path, exist_ok=True)
+    global _active_folder_path
+    _active_folder_path = dir_path
 
     _report(3)
 
@@ -258,15 +267,12 @@ def _download_youtube(url, adapter, movies_folder, _report):
     if os.path.isdir(ffmpeg_dir):
         os.environ['PATH'] = ffmpeg_dir + os.path.pathsep + os.environ.get('PATH', '')
 
-    ydl_opts_dl = {
-        'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
-        'outtmpl': outtmpl,
-        'merge_output_format': 'mp4',
-        'progress_hooks': [ytdl_hook],
-        'noplaylist': True,
-        'quiet': True,
-        'no_warnings': True,
-    }
+    ydl_opts_dl = ytdlp_options(
+        format='bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+        outtmpl=outtmpl,
+        merge_output_format='mp4',
+        progress_hooks=[ytdl_hook],
+    )
 
     with yt_dlp.YoutubeDL(ydl_opts_dl) as ydl:
         ydl.download([url])
@@ -282,12 +288,13 @@ def _download_youtube(url, adapter, movies_folder, _report):
             raise FileNotFoundError(f'下載完成但找不到 MP4 檔案 ({video_name})')
 
     dst = os.path.join(movies_folder, f'{video_name}.mp4')
-    os.rename(mp4_file, dst)
+    os.replace(mp4_file, dst)
     try:
         shutil.rmtree(dir_path)
     except Exception:
         pass
+    _active_folder_path = None
 
     _report(100)
     print(f'✅ 影片已移至: {dst}')
-
+    return os.path.relpath(dst, media_root)

@@ -817,7 +817,9 @@ def _download_worker(video_id: int, url: str):
             record = _cat.get_video_by_id(video_id) or {'id': video_id, 'title': ''}
             captured_path = capture_dl.download(record, cap, progress_cb=_write_progress)
         else:
-            download.download(url, progress_cb=_write_progress)
+            # yt-dlp sites return the exact path they wrote; adapter sites return
+            # None and are found by name below.
+            captured_path = download.download(url, progress_cb=_write_progress)
 
         # Update the DB with the new local file path
         record = _cat.get_video_by_id(video_id)

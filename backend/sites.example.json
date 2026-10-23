@@ -7,6 +7,7 @@
     "example.com"
   ],
   "domain_prefixes": [],
+  "_comment_downloader": "OPTIONAL. 'ytdlp' makes yt-dlp fetch the title, cover and video instead of Selenium (no selectors needed; see sites/x.json). Absent = the Selenium/HLS/http pipelines below.",
   "user_agent": "",
   "title_selectors": [
     "h1",

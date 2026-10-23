@@ -535,3 +535,74 @@ def test_import_episode_parsing(episode, expected):
 def test_import_drops_episode_without_series():
     catalog.import_videos([{'code': 'ABC-123', 'url': 'u', 'title': 't', 'episode': 5}])
     assert catalog.search_by_code('ABC-123')[0]['episode'] is None
+
+
+# --- yt-dlp sites (X) -------------------------------------------------------------
+
+def _fake_ytdlp(monkeypatch, info=None, error=None):
+    import sys, types
+    calls = []
+
+    class FakeYDL:
+        def __init__(self, opts):
+            calls.append(opts)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def extract_info(self, url, download=False):
+            if error:
+                raise error
+            return info
+
+    monkeypatch.setitem(sys.modules, 'yt_dlp', types.SimpleNamespace(YoutubeDL=FakeYDL))
+    return calls
+
+
+def test_x_post_is_analysed_through_ytdlp_without_selenium(db, sites_dir, monkeypatch):
+    import shutil, os
+    shutil.copy(os.path.join(os.path.dirname(catalog.__file__), 'sites', 'x.json'), sites_dir / 'x.json')
+    calls = _fake_ytdlp(monkeypatch, {'title': 'Alice - look at this', 'thumbnail': 'https://img/t.jpg', 'id': '1'})
+    monkeypatch.setattr(catalog, '_start_scrape_driver',
+                        lambda *a: (_ for _ in ()).throw(AssertionError('Selenium must not start')))
+    monkeypatch.setattr(catalog, 'translate_to_zh_tw', lambda t, *a, **k: t)
+    monkeypatch.setattr(catalog, 'translate_tags_to_zh_tw', lambda t: t)
+    monkeypatch.setattr(catalog, 'fetch_cover_image', lambda *a, **k: None)
+    rec = catalog.process_url('https://x.com/alice/status/1234567890123456789', skip_download=True)
+    assert rec['code'] == 'XP-01' and rec['cover'] == 'https://img/t.jpg'
+    assert rec['actress'] is None            # "Alice - ..." must not be parsed as a cast name
+    again = catalog.process_url('https://x.com/alice/status/1234567890123456789', skip_download=True)
+    assert again['code'] == 'XP-01' and len(catalog.list_all_videos()) == 1
+    assert calls[0]['noplaylist'] is True
+
+
+def test_x_failure_is_reported_not_scraped(sites_dir, monkeypatch):
+    import shutil, os
+    shutil.copy(os.path.join(os.path.dirname(catalog.__file__), 'sites', 'x.json'), sites_dir / 'x.json')
+    _fake_ytdlp(monkeypatch, error=RuntimeError('This tweet is NSFW; log in'))
+    with pytest.raises(ValueError, match='NSFW'):
+        catalog.fetch_page_metadata('https://twitter.com/a/status/1')
+
+
+def test_multi_video_post_uses_first_entry(sites_dir, monkeypatch):
+    import shutil, os
+    shutil.copy(os.path.join(os.path.dirname(catalog.__file__), 'sites', 'x.json'), sites_dir / 'x.json')
+    _fake_ytdlp(monkeypatch, {'entries': [None, {'title': 'first', 'id': '9', 'thumbnail': 't'}, {'title': 'second'}]})
+    assert catalog.fetch_page_metadata('https://x.com/a/status/1')[0] == 'first'
+
+
+def test_ytdlp_options_read_cookies_file(tmp_path, monkeypatch):
+    import site_config
+    monkeypatch.setenv('OASIS_MEDIA_ROOT', str(tmp_path))
+    monkeypatch.delenv('OASIS_COOKIES_FILE', raising=False)
+    assert 'cookiefile' not in site_config.ytdlp_options()
+    (tmp_path / 'cookies.txt').write_text('# Netscape HTTP Cookie File\n')
+    assert site_config.ytdlp_options()['cookiefile'] == str(tmp_path / 'cookies.txt')
+    other = tmp_path / 'other.txt'
+    other.write_text('x')
+    monkeypatch.setenv('OASIS_COOKIES_FILE', str(other))
+    assert site_config.ytdlp_options(quiet=False)['cookiefile'] == str(other)
+    assert site_config.ytdlp_options(quiet=False)['quiet'] is False

@@ -366,3 +366,38 @@ def test_worker_end_to_end_capture_to_streamable_file(tmp_path, local, media, mo
     assert record['video_path'] == 'movies/Wired up.mp4'
     s = local.get(f'/api/stream/{vid}')
     assert s.status_code == 200 and len(s.content) > 10000
+
+
+def test_download_ytdlp_returns_exact_path_for_a_title_the_filename_cannot_hold(tmp_path, sites_dir, monkeypatch):
+    """The stored title keeps `"` and `?`; the file name cannot. Finding the file
+    by title would miss it, so the path comes back from the downloader itself."""
+    import sys, types, os
+    import download, shutil
+    shutil.copy(os.path.join(os.path.dirname(download.__file__), 'sites', 'x.json'), sites_dir / 'x.json')
+    monkeypatch.setenv('OASIS_MEDIA_ROOT', str(tmp_path))
+    movies = download.movies_dir()
+
+    class FakeYDL:
+        def __init__(self, opts):
+            self.opts = opts
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def extract_info(self, url, download=False):
+            return {'title': 'Alice on X: "wow?"\n  second line ' + 'x' * 300}
+
+        def download(self, urls):
+            out = self.opts['outtmpl'] % {'ext': 'mp4'}
+            open(out, 'wb').write(b'video')
+
+    monkeypatch.setitem(sys.modules, 'yt_dlp', types.SimpleNamespace(YoutubeDL=FakeYDL))
+    seen = []
+    rel = download.download('https://x.com/alice/status/1', progress_cb=seen.append)
+    assert rel.startswith('movies' + os.sep) and rel.endswith('.mp4')
+    assert '"' not in rel and '?' not in rel and '\n' not in rel and len(os.path.basename(rel)) <= 124
+    assert open(os.path.join(str(tmp_path), rel), 'rb').read() == b'video'
+    assert sorted(os.listdir(movies)) == [os.path.basename(rel)] and seen[-1] == 100

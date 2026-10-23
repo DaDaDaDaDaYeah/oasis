@@ -1,0 +1,22 @@
+{
+  "id": "x",
+  "name": "X (Twitter)",
+  "category": "general",
+  "display_domain": "x.com",
+  "domains": [
+    "x.com",
+    "twitter.com"
+  ],
+  "domain_prefixes": [],
+
+  "_comment_downloader": "'ytdlp' hands both the metadata and the download to yt-dlp instead of Selenium, so this adapter needs no selectors. X builds its player from signed API calls, which yt-dlp's extractor already tracks. Posts that need a logged-in account (age-restricted ones) need a Netscape cookies.txt exported from your browser, saved as <media root>/cookies.txt (/data/cookies.txt in Docker) or pointed at by OASIS_COOKIES_FILE.",
+  "downloader": "ytdlp",
+
+  "_comment_code": "Tweet ids are 19 digits, far wider than the catalog's AAA-123 code shape, so codes are handed out in order: X-01, X-02 ... Re-analysing the same URL keeps its number.",
+  "code": {
+    "from": "sequence",
+    "prefix": "XP",
+    "min_digits": 2,
+    "max_digits": 5
+  }
+}
