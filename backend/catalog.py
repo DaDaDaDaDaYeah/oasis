@@ -1007,7 +1007,7 @@ def fetch_page_metadata(url: str) -> tuple:
     """
     global _active_driver
     from site_config import (detect_site, get_cover_url, get_video_actress, get_video_name, get_video_tags,
-                             is_challenge_page, uses_ytdlp, wait_for_page_load, ytdlp_options)
+                             uses_ytdlp, wait_for_page_load, ytdlp_options)
 
     adapter = detect_site(url)
 
@@ -1038,11 +1038,6 @@ def fetch_page_metadata(url: str) -> tuple:
     try:
         dr.get(url)
         wait_for_page_load(dr, adapter)
-
-        if is_challenge_page(dr):
-            raise ValueError(
-                f'{adapter.get("name", "此網站")} 的安全驗證擋下了後端的瀏覽器（Cloudflare「Just a moment」），'
-                '讀不到影片資訊。請改用瀏覽器擴充功能：在自己的瀏覽器播放影片後按「下載」。')
 
         video_name = get_video_name(dr, adapter)
         raw_tags = get_video_tags(dr, adapter)

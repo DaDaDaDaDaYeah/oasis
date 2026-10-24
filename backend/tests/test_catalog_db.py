@@ -606,27 +606,3 @@ def test_ytdlp_options_read_cookies_file(tmp_path, monkeypatch):
     monkeypatch.setenv('OASIS_COOKIES_FILE', str(other))
     assert site_config.ytdlp_options(quiet=False)['cookiefile'] == str(other)
     assert site_config.ytdlp_options(quiet=False)['quiet'] is False
-
-
-def test_challenge_page_stops_analysis_instead_of_filing_a_junk_record(db, sites_dir, monkeypatch):
-    from conftest import write_adapter
-    write_adapter(sites_dir, 'ch', {'id': 'ch', 'name': 'Ch', 'domains': ['challenge.test']})
-
-    class Driver:
-        title = 'Just a moment...'
-
-        def get(self, url):
-            pass
-
-        def quit(self):
-            pass
-
-        def find_element(self, *a):
-            return type('E', (), {'text': 'Performing security verification'})()
-
-    import site_config
-    monkeypatch.setattr(catalog, '_start_scrape_driver', lambda adapter: Driver())
-    monkeypatch.setattr(site_config, 'wait_for_page_load', lambda dr, adapter: None)
-    with pytest.raises(ValueError, match='擴充功能'):
-        catalog.process_url('https://challenge.test/v/1', skip_download=True)
-    assert catalog.list_all_videos() == []

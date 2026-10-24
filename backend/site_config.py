@@ -443,27 +443,6 @@ def get_m3u8_url(driver, adapter: dict):
     raise ValueError(f'無法找到 m3u8 網址（{adapter.get("name", adapter.get("id"))}），請確認網址是否正確。頁面：{seen}')
 
 
-_CHALLENGE_TITLES = ('just a moment', 'attention required', 'security verification', '請稍候', '请稍候')
-_CHALLENGE_TEXT = ('performing security verification', 'checking if the site connection is secure',
-                   'verify you are human', '正在驗證', '正在验证')
-
-
-def is_challenge_page(driver) -> bool:
-    """Is the browser sitting on an anti-bot interstitial (Cloudflare & co.)?
-
-    Such a page has no title and no player, so scraping it files a junk record
-    named after the host and then fails to find a stream. Detecting it lets the
-    caller stop with an honest message instead."""
-    try:
-        title = (driver.title or '').lower()
-        if any(t in title for t in _CHALLENGE_TITLES):
-            return True
-        body = driver.find_element('css selector', 'body').text.lower()[:600]
-        return any(t in body for t in _CHALLENGE_TEXT)
-    except Exception:
-        return False
-
-
 def describe_page(driver, limit: int = 160) -> str:
     """One line on the page the driver is on: final URL, <title> and the start of
     the visible text. Never raises -- it runs while reporting another failure."""
