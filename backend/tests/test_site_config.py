@@ -330,3 +330,60 @@ def test_describe_page_never_raises():
 
     out = site_config.describe_page(Broken())
     assert "標題='?'" in out and "內容='?'" in out
+
+
+def _server_driver(live):
+    """Page whose 'm3u8' appears only after clicking the server button named `live`."""
+    class El:
+        def __init__(self, d, name):
+            self.d, self.name = d, name
+
+        def click(self):
+            self.d.clicked.append(self.name)
+            if self.name == live:
+                self.d.src = 'var s="https://cdn.test/a.m3u8";'
+
+    class Driver:
+        clicked = []
+        src = ''
+        page_source = ''
+
+        def __init__(self):
+            self.clicked = []
+
+        def find_element(self, by, sel):
+            name = sel.split("='")[1].split("'")[0] if "='" in sel else None
+            if name not in ('FST', 'ST', 'VOE'):
+                raise LookupError(sel)
+            return El(self, name)
+
+        @property
+        def page_source(self):
+            return self.src
+
+        def execute_script(self, *a):
+            return ''
+
+    return Driver()
+
+
+def _try_each_cfg(try_each):
+    sel = lambda n: f"xpath://a[normalize-space()='{n}']"
+    return {'id': 'x', 'name': 'X', 'm3u8': {'retry': {
+        'wait_seconds': 0, 'click_wait_seconds': 0, 'attempts': 1, 'try_each': try_each,
+        'click_selectors': [sel('FST'), sel('ST'), sel('VOE')]}}}
+
+
+def test_try_each_falls_through_a_dead_server_button(monkeypatch):
+    monkeypatch.setattr(site_config.time, 'sleep', lambda s: None)
+    d = _server_driver(live='VOE')
+    assert site_config.get_m3u8_url(d, _try_each_cfg(True)) == 'https://cdn.test/a.m3u8'
+    assert d.clicked == ['FST', 'ST', 'VOE']
+
+
+def test_default_retry_stops_at_the_first_button_that_exists(monkeypatch):
+    monkeypatch.setattr(site_config.time, 'sleep', lambda s: None)
+    d = _server_driver(live='VOE')
+    with pytest.raises(ValueError):
+        site_config.get_m3u8_url(d, _try_each_cfg(False))
+    assert d.clicked == ['FST']

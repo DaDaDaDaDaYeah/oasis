@@ -46,8 +46,11 @@
     "retry": {
       "wait_seconds": 3,
       "attempts": 5,
+      "try_each": true,
       "click_selectors": [
         "xpath://a[contains(@class,'btn-server') and normalize-space()='FST']",
+        "xpath://a[contains(@class,'btn-server') and normalize-space()='ST']",
+        "xpath://a[contains(@class,'btn-server') and normalize-space()='VOE']",
         "#vserver, .play-button"
       ],
       "click_wait_seconds": 8

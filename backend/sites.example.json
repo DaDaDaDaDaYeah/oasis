@@ -52,6 +52,7 @@
     "retry": {
       "wait_seconds": 5,
       "attempts": 1,
+      "try_each": false,
       "click_selectors": [
         ".play-button",
         "xpath://a[normalize-space()='Server 2']"

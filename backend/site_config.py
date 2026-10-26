@@ -423,14 +423,23 @@ def get_m3u8_url(driver, adapter: dict):
         print('等待頁面載入影片播放器...')
         time.sleep(retry.get('wait_seconds', 5))
         # Multiple attempts: popunder ads routinely swallow the first click.
+        # try_each: a click that succeeds but yields no stream (a dead server
+        # button) must not end the round -- fall through to the next selector.
+        # Off by default: the plain mode stops at the first element that exists,
+        # and extra clicks on other sites only open more popunders.
+        try_each = retry.get('try_each')
         for _ in range(retry.get('attempts', 1)):
             for selector in retry.get('click_selectors', []):
                 try:
                     _click_selector(driver, selector)
                     time.sleep(retry.get('click_wait_seconds', 3))
-                    break
                 except Exception:
                     continue
+                if not try_each:
+                    break
+                found = attempt()
+                if found:
+                    return found
             found = attempt()
             if found:
                 return found
