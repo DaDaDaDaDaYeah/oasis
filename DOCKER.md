@@ -25,6 +25,7 @@ docker compose logs api       # 找到「存取碼： XXXX-XXXX」
 - **權限**：容器以 UID/GID 1000 執行。你的帳號不是 1000 的話：`PUID=$(id -u) PGID=$(id -g) docker compose up -d`（或寫進 `.env`）。
 - **更新**：`git pull && docker compose up -d --build`。軟體內建的更新器只用於打包版，這裡不會用到。
 - **換 IP 不用重啟。** 網頁介面預設連到「你瀏覽的那個位址」的 `:8000`，後端也會允許同一個位址的網頁來源（只限 IP、`localhost`、單一名稱或 `.local`，公開網域不會被放行）。要掛在自己的網域／反向代理後面時，用 `ALLOWED_ORIGINS` 加入該網域。
+- **走代理伺服器**：在 `.env` 加 `OASIS_PROXY=http://<代理 IP>:<埠>`，再 `docker compose up -d`。爬網頁的瀏覽器和下載都會經過它；留空就是直連。容器裡的 `localhost` 是容器自己，代理在同一台主機上請用主機的區網 IP 或 `http://host.docker.internal:<埠>`。只支援不需帳密的 HTTP 代理。
 
 ## 安全提醒
 

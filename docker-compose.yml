@@ -23,6 +23,16 @@ services:
       # under a real domain. Pages on the same host you browse to are already allowed.
       ALLOWED_ORIGINS: "${ALLOWED_ORIGINS:-http://localhost:3000,https://oasis.fusion-labs.cc}"
       TZ: "${TZ:-UTC}"
+      # Optional HTTP proxy for everything the backend fetches: OASIS_PROXY routes
+      # the scraping browser, HTTP(S)_PROXY the downloads. Empty means direct.
+      # From inside the container, "localhost" is the container itself -- use the
+      # host's LAN IP or host.docker.internal.
+      OASIS_PROXY: "${OASIS_PROXY:-}"
+      HTTP_PROXY: "${OASIS_PROXY:-}"
+      HTTPS_PROXY: "${OASIS_PROXY:-}"
+      NO_PROXY: "localhost,127.0.0.1"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
   web:
     build: ./web

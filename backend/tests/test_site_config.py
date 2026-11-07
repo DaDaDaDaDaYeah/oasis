@@ -387,3 +387,13 @@ def test_default_retry_stops_at_the_first_button_that_exists(monkeypatch):
     with pytest.raises(ValueError):
         site_config.get_m3u8_url(d, _try_each_cfg(False))
     assert d.clicked == ['FST']
+
+
+def test_oasis_proxy_is_passed_to_chromium(monkeypatch):
+    from selenium.webdriver.chrome.options import Options
+    monkeypatch.setenv('OASIS_PROXY', 'http://192.168.1.10:8888')
+    opts = site_config.setup_driver_for_site(Options(), {'id': 'x'})
+    assert '--proxy-server=http://192.168.1.10:8888' in opts.arguments
+    monkeypatch.delenv('OASIS_PROXY')
+    opts = site_config.setup_driver_for_site(Options(), {'id': 'x'})
+    assert not any(a.startswith('--proxy-server') for a in opts.arguments)

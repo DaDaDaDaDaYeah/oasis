@@ -621,6 +621,12 @@ def setup_driver_for_site(options, adapter: dict):
     chrome_bin = os.environ.get('CHROME_BIN')
     if chrome_bin:
         options.binary_location = chrome_bin
+    # Chromium does not reliably read HTTPS_PROXY from the environment (it looks
+    # for desktop proxy settings first), so the route the downloads take via
+    # HTTPS_PROXY has to be handed to the browser explicitly to match.
+    proxy = (os.environ.get('OASIS_PROXY') or '').strip()
+    if proxy:
+        options.add_argument('--proxy-server=' + proxy)
     driver_cfg = adapter.get('driver', {})
     if driver_cfg.get('performance_log'):
         options.set_capability('goog:loggingPrefs', {'performance': 'ALL'})
