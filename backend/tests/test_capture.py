@@ -126,6 +126,34 @@ def test_title_with_known_code_attaches_to_the_existing_video(local, queued, pub
     assert capture.get(vid) is not None
 
 
+def test_cover_is_stored_and_a_resend_adds_it_to_an_entry_that_has_none(local, queued, public_dns):
+    cover = 'https://cdn.example/poster.jpg'
+    first = local.post('/api/capture', json=_body()).json()
+    assert not first['record'].get('cover')
+    second = local.post('/api/capture', json=_body(cover=cover)).json()
+    assert second['status'] == 'exists' and second['record']['cover'] == cover
+    assert catalog.get_video_by_id(first['record']['id'])['cover'] == cover
+    # A new capture carries it from the start.
+    fresh = local.post('/api/capture', json=_body(
+        media_url='https://cdn.example/other/master.m3u8', title='Another', cover=cover)).json()
+    assert fresh['status'] == 'created' and fresh['record']['cover'] == cover
+
+
+def test_resend_does_not_replace_a_cover_the_entry_already_has(local, queued, public_dns):
+    local.post('/api/capture', json=_body(cover='https://cdn.example/a.jpg'))
+    again = local.post('/api/capture', json=_body(cover='https://cdn.example/b.jpg')).json()
+    assert again['record']['cover'] == 'https://cdn.example/a.jpg'
+
+
+def test_private_network_cover_is_dropped_for_remote_callers_but_the_video_is_filed(queued, public_dns):
+    code = auth.enable()
+    client = make_client('lan')
+    r = client.post('/api/capture', json=_body(cover='http://192.168.1.1/admin.png'),
+                    headers={**CLIENT_HDR, 'Authorization': f'Bearer {code}'})
+    assert r.status_code == 200, r.text
+    assert not r.json()['record'].get('cover')
+
+
 def test_no_download_flag_only_files_it(local, queued, public_dns):
     r = local.post('/api/capture', json=_body(download=False)).json()
     assert r['download_started'] is False and queued == []

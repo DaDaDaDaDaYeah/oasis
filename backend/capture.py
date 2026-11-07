@@ -173,11 +173,24 @@ def create(page_url: str, media_url: str, title: str | None = None, kind: str | 
     kind = detect_kind(media_url, kind, content_type)
     headers = clean_headers(headers)
 
+    # The backend fetches the cover itself (and serves it back), so it gets the
+    # same LAN guard as the stream. A bad cover is dropped, not an error: the
+    # video is still worth filing without one.
+    cover = (cover or '').strip()
+    if cover:
+        try:
+            check_destination(cover, allow_private)
+        except CaptureError:
+            cover = ''
+
     existing = _by_media_url(media_url)
     if existing is not None:
         record = catalog.get_video_by_id(existing)
         if record:
             _store(existing, page_url, media_url, kind, headers)  # refresh expiring tokens
+            if cover and not record.get('cover'):
+                # A re-send is how an entry captured before covers were sent gets one.
+                record = catalog.update_video_details(existing, cover=cover) or record
             return record, False
         delete(existing)
 
@@ -190,6 +203,6 @@ def create(page_url: str, media_url: str, title: str | None = None, kind: str | 
             _store(record['id'], page_url, media_url, kind, headers)
             return record, False
 
-    record = catalog.create_manual_video(url=page_url, title=title, cover=(cover or '').strip() or None)
+    record = catalog.create_manual_video(url=page_url, title=title, cover=cover or None)
     _store(record['id'], page_url, media_url, kind, headers)
     return record, True

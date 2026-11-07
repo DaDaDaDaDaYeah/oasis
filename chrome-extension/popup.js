@@ -257,9 +257,39 @@ async function renderMedia() {
     });
 }
 
+// The page's own poster image, read from the tab the video is playing in. It is
+// best-effort: a page without one, or a tab the browser won't let us script
+// (chrome:// pages, the web store), simply files the video without a cover.
+async function pageCover(tab) {
+  try {
+    const [res] = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: () => {
+        const attr = (sel, a) => document.querySelector(sel)?.getAttribute(a);
+        const v =
+          attr("meta[property='og:image']", "content") ||
+          attr("meta[name='twitter:image']", "content") ||
+          attr("link[rel='image_src']", "href") ||
+          attr("video[poster]", "poster");
+        if (!v) return null;
+        try {
+          const u = new URL(v, location.href);
+          return /^https?:$/.test(u.protocol) ? u.href : null;
+        } catch {
+          return null;
+        }
+      },
+    });
+    return res?.result || null;
+  } catch {
+    return null;
+  }
+}
+
 async function sendToOasis(item, tab, button) {
   button.disabled = true;
   try {
+    const cover = await pageCover(tab);
     const res = await backendFetch("/api/capture", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -272,6 +302,7 @@ async function sendToOasis(item, tab, button) {
         // A request with no Referer of its own was made from this page; most
         // hotlink checks want to see it.
         headers: { Referer: tab.url, ...item.headers },
+        cover,
         download: true,
       }),
     });
