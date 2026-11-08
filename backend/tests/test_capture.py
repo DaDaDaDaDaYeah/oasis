@@ -241,15 +241,17 @@ def test_encrypted_ts_hls_downloads_with_sequence_number_ivs(tmp_path, movies):
     httpd, base = _serve(src, seen)
     try:
         cap = {'kind': 'hls', 'media_url': f'{base}/index.m3u8', 'headers': {'Referer': 'https://site.example/'}}
-        rel = capture_dl.download({'id': 1, 'code': 'MANUAL-1', 'title': 'clip'}, cap)
+        rel = capture_dl.download({'id': 1, 'code': 'MANUAL-1', 'title': 'clip',
+                                   'url': 'https://www.site.example/watch/1'}, cap)
     finally:
         httpd.shutdown()
         httpd.server_close()
-    assert rel == 'movies/clip.mp4'
-    kinds, duration = _probe(movies / 'clip.mp4')
+    # No adapter claims the page, so it is filed under the page's host, www. dropped.
+    assert rel == 'movies/site.example/clip.mp4'
+    kinds, duration = _probe(movies / 'site.example' / 'clip.mp4')
     assert kinds == {'video', 'audio'} and 3.5 < duration < 4.5
     assert all(h.get('Referer') == 'https://site.example/' for h in seen)
-    assert sorted(p.name for p in movies.iterdir()) == ['clip.mp4']   # work folder removed
+    assert sorted(p.name for p in (movies / 'site.example').iterdir()) == ['clip.mp4']   # work folder removed
 
 
 @needs_ffmpeg
@@ -267,7 +269,7 @@ def test_fmp4_master_playlist_with_separate_audio_rendition(tmp_path, movies):
     finally:
         httpd.shutdown()
         httpd.server_close()
-    kinds, duration = _probe(movies / 'split.mp4')
+    kinds, duration = _probe(movies / 'other' / 'split.mp4')
     assert kinds == {'video', 'audio'} and 3.5 < duration < 4.5
 
 
@@ -283,7 +285,7 @@ def test_expired_link_returning_html_is_not_promoted(tmp_path, movies):
     finally:
         httpd.shutdown()
         httpd.server_close()
-    assert not (movies / 'gone.mp4').exists()
+    assert not (movies / 'other' / 'gone.mp4').exists()
 
 
 def test_live_hls_is_refused(tmp_path, movies):
@@ -301,9 +303,12 @@ def test_live_hls_is_refused(tmp_path, movies):
 
 
 def test_name_collision_gets_the_code_appended(movies):
-    movies.mkdir(parents=True, exist_ok=True)
-    (movies / 'clip.mp4').write_bytes(b'other video')
-    assert capture_dl.target_name({'id': 9, 'code': 'MANUAL-9', 'title': 'clip'}) == 'clip [MANUAL-9]'
+    (movies / 'site.example').mkdir(parents=True, exist_ok=True)
+    (movies / 'site.example' / 'clip.mp4').write_bytes(b'other video')
+    rec = {'id': 9, 'code': 'MANUAL-9', 'title': 'clip', 'url': 'https://site.example/w/9'}
+    assert capture_dl.target_name(rec) == 'clip [MANUAL-9]'
+    # Collisions are per site folder: the same title from another site is no clash.
+    assert capture_dl.target_name({**rec, 'url': 'https://other.example/w/9'}) == 'clip'
     assert capture_dl.target_name({'id': 9, 'code': 'MANUAL-9', 'title': 'a/b:c?'}) == 'abc'
 
 
@@ -391,7 +396,7 @@ def test_worker_end_to_end_capture_to_streamable_file(tmp_path, local, media, mo
         httpd.server_close()
         crawler.reset_stop()
     record = catalog.get_video_by_id(vid)
-    assert record['video_path'] == 'movies/Wired up.mp4'
+    assert record['video_path'] == 'movies/site.example/Wired up.mp4'
     s = local.get(f'/api/stream/{vid}')
     assert s.status_code == 200 and len(s.content) > 10000
 
@@ -425,7 +430,7 @@ def test_download_ytdlp_returns_exact_path_for_a_title_the_filename_cannot_hold(
     monkeypatch.setitem(sys.modules, 'yt_dlp', types.SimpleNamespace(YoutubeDL=FakeYDL))
     seen = []
     rel = download.download('https://x.com/alice/status/1', progress_cb=seen.append)
-    assert rel.startswith('movies' + os.sep) and rel.endswith('.mp4')
+    assert rel.startswith(os.path.join('movies', 'X (Twitter)') + os.sep) and rel.endswith('.mp4')
     assert '"' not in rel and '?' not in rel and '\n' not in rel and len(os.path.basename(rel)) <= 124
     assert open(os.path.join(str(tmp_path), rel), 'rb').read() == b'video'
-    assert sorted(os.listdir(movies)) == [os.path.basename(rel)] and seen[-1] == 100
+    assert sorted(os.listdir(os.path.join(movies, 'X (Twitter)'))) == [os.path.basename(rel)] and seen[-1] == 100

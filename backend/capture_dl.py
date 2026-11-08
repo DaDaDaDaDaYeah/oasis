@@ -14,8 +14,9 @@ to the bytes, through one of three pipelines:
 - **dash** — dash.py.
 - **http** — httpdl.py (multi-connection, resumable).
 
-Every pipeline works in `movies/<name>/` and moves the finished MP4 up to
-`movies/<name>.mp4`, the layout the rest of the backend expects; the worker's
+Every pipeline works in `movies/<site>/<name>/` and moves the finished MP4 up
+to `movies/<site>/<name>.mp4` (site = the page's adapter name, else its host);
+the worker's
 cancel handler wipes that folder through `_active_folder_path`.
 """
 
@@ -30,7 +31,7 @@ import requests
 import dash
 import httpdl
 import segments
-from download import movies_dir
+from download import media_root as _download_media_root, movies_dir, site_movies_dir
 from site_config import _clean_filename
 
 _active_folder_path = None
@@ -44,7 +45,17 @@ class CaptureDownloadError(Exception):
 
 
 def _media_root() -> str:
-    return os.path.dirname(movies_dir())
+    return _download_media_root()
+
+
+def _site_dir(record: dict) -> str:
+    page = record.get('url') or ''
+    try:
+        from site_config import detect_site
+        adapter = detect_site(page)
+    except Exception:
+        adapter = None
+    return site_movies_dir(adapter, page)
 
 
 def target_name(record: dict) -> str:
@@ -53,7 +64,7 @@ def target_name(record: dict) -> str:
     title = _clean_filename(record.get('title_zh_tw') or record.get('title') or '')[:120].strip(' .')
     code = record.get('code') or f'video-{record.get("id")}'
     name = title or code
-    movies = movies_dir()
+    movies = _site_dir(record)
     if os.path.exists(os.path.join(movies, name + '.mp4')) and code not in name:
         name = f'{name} [{code}]'
     return name
@@ -74,7 +85,7 @@ def download(record: dict, cap: dict, progress_cb=None) -> str:
     report(1)
     headers = {'User-Agent': DEFAULT_UA, **(cap.get('headers') or {})}
     name = target_name(record)
-    movies = movies_dir()
+    movies = _site_dir(record)
     final = os.path.join(movies, name + '.mp4')
     if os.path.exists(final):
         print('影片已存在, 跳過...')

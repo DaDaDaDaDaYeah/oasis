@@ -21,6 +21,7 @@ docker compose logs api       # 找到「存取碼： XXXX-XXXX」
 - **用 `http://<IP>:3000`，不要用公開網站。** https 的公開網站無法連到 http 的伺服器位址（瀏覽器的混合內容限制）。
 - **瀏覽器擴充功能**：在擴充功能的齒輪裡把後端網址設成 `http://<伺服器 IP>:8000`（擴充功能跟後端在同一台機器上也一樣，例如 Steam Deck 桌面模式用 `http://localhost:8000`），並填入存取碼——Docker 下每個連線都需要它。
 - **沒有「用本機播放器開啟」。** 那個功能會在後端所在的機器上開播放器，容器內做不到；用網頁內建播放器。
+- **依網站分資料夾**：新下載的影片會放在 `movies/<網站>/`（例如 `movies/SupJav/`、`movies/X (Twitter)/`；擴充功能擷取的則用網域，例如 `movies/supjav.com/`）。之前下載的影片留在 `movies/` 不搬動，照樣能播放。
 - **封面圖檔**：封面存在 `oasis.db`，同時也會以同名圖檔寫進 `movies/`（`ABC-123.mp4` → `ABC-123.jpg`），既有的圖檔不會被覆蓋。
 - **權限**：容器以 UID/GID 1000 執行。你的帳號不是 1000 的話：`PUID=$(id -u) PGID=$(id -g) docker compose up -d`（或寫進 `.env`）。
 - **更新**：`git pull && docker compose up -d --build`。軟體內建的更新器只用於打包版，這裡不會用到。

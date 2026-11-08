@@ -606,3 +606,10 @@ def test_ytdlp_options_read_cookies_file(tmp_path, monkeypatch):
     monkeypatch.setenv('OASIS_COOKIES_FILE', str(other))
     assert site_config.ytdlp_options(quiet=False)['cookiefile'] == str(other)
     assert site_config.ytdlp_options(quiet=False)['quiet'] is False
+
+
+def test_find_local_file_looks_inside_site_folders(media_root):
+    site = media_root / 'movies' / 'SupJav'
+    site.mkdir(parents=True)
+    (site / '[tag] ABC-999 Title.mp4').write_bytes(b'v')
+    assert catalog.find_local_file('ABC-999', 'zzz') == os.path.join('movies', 'SupJav', '[tag] ABC-999 Title.mp4')

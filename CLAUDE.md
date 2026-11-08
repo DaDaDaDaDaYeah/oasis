@@ -91,7 +91,7 @@ Scraping and downloading are heavy and blocking (Selenium, network I/O, FFmpeg),
 - **Analyses** run in parallel, keyed by `task_id` in `active_analyses`. One analysis yields a **list** of records, not one — a listing URL produces one per episode — and `_bg_check_analyses` queues each with **its own** URL, never the analysed one: a listing page's URL scrapes no video, and the download worker re-navigates to read the title and media source off the page it is handed.
 - **Downloads are serialised** — exactly one at a time, FIFO through `download_queue`. `_pump_downloads()` reaps the finished one and starts the next; it is driven by `_bg_check_analyses()`, an asyncio loop that ticks every second.
 
-`download.movies_dir()` resolves `movies/` from `OASIS_MEDIA_ROOT`, like `catalog.find_local_file`. It used to be derived from `__file__`, which only agrees outside Docker (there source is `/app`, media `/data`).
+`download.movies_dir()` resolves `movies/` from `OASIS_MEDIA_ROOT`, like `catalog.find_local_file`. New downloads go one level down, into `movies/<site>/` (`site_movies_dir`: the adapter's `name`, or the page host for a capture no adapter claims); files from before that stay in `movies/`, so every pipeline's "already downloaded" check looks in both and `find_local_file` searches both levels. `download.download()` now returns the relative path on the adapter path too. It used to be derived from `__file__`, which only agrees outside Docker (there source is `/app`, media `/data`).
 
 Since worker processes cannot share memory with the API, IPC is done through the filesystem in `$TMPDIR/oasis_progress/`:
 

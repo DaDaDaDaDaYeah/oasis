@@ -87,11 +87,29 @@ def test_adapter_hls_download_with_disguised_segments(hls_site, tmp_path, sites_
 
     result = download.download(f'{base}/watch/1', progress_cb=progress.append)
 
-    assert result is None                       # adapter sites are found by name, as before
+    assert result == os.path.join('movies', 'SJ', 'SJ-001 A title.mp4')   # into the site's folder
     movies = tmp_path / 'media' / 'movies'
-    assert [p.name for p in movies.iterdir()] == ['SJ-001 A title.mp4']      # work folder removed
+    assert [p.name for p in movies.iterdir()] == ['SJ']
+    assert [p.name for p in (movies / 'SJ').iterdir()] == ['SJ-001 A title.mp4']   # work folder removed
     out = subprocess.run(['ffprobe', '-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0',
-                          str(movies / 'SJ-001 A title.mp4')], capture_output=True, text=True, check=True).stdout
+                          str(movies / 'SJ' / 'SJ-001 A title.mp4')], capture_output=True, text=True, check=True).stdout
     assert 3.5 < float(out) < 4.5
     assert progress[0] == 1 and progress[-1] == 100 and progress == sorted(progress)
     assert any(h.get('Referer') == f'{base}/watch/1' for h in seen)          # adapter headers still sent
+
+
+def test_a_video_already_in_flat_movies_is_not_downloaded_again(tmp_path, sites_dir, monkeypatch):
+    """Files from before site folders stay in movies/; finding one there must
+    still count as downloaded, or every old video would be fetched again."""
+    from conftest import write_adapter
+    write_adapter(sites_dir, 'sj', {'id': 'sj', 'name': 'SJ', 'domains': ['old.test']})
+    monkeypatch.setenv('OASIS_MEDIA_ROOT', str(tmp_path))
+    (tmp_path / 'movies').mkdir()
+    (tmp_path / 'movies' / 'Old one.mp4').write_bytes(b'v')
+    monkeypatch.setattr(download.webdriver, 'Chrome', lambda **kw: _Driver())
+    monkeypatch.setattr(download, 'setup_driver_for_site', lambda options, adapter: options)
+    monkeypatch.setattr(download, 'chrome_service', lambda **kw: None)
+    monkeypatch.setattr(download, 'wait_for_page_load', lambda dr, adapter: None)
+    monkeypatch.setattr(download, 'get_video_name', lambda dr, adapter: 'Old one')
+    monkeypatch.setattr(download, 'get_m3u8_url', lambda dr, adapter: pytest.fail('re-downloaded'))
+    assert download.download('https://old.test/w/1') == os.path.join('movies', 'Old one.mp4')

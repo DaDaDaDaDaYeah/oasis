@@ -23,6 +23,30 @@ _active_driver = None
 _active_folder_path = None
 
 
+def media_root() -> str:
+  return os.environ.get('OASIS_MEDIA_ROOT') or os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+
+
+def site_folder_name(adapter: dict | None = None, url: str | None = None) -> str:
+  """The movies/ subfolder new downloads of one site go into: the adapter's
+  display name (SupJav, X, YouTube), or the host for a capture no adapter claims.
+  Files already in movies/ stay where they are; video_path records each file's
+  own location, so both layouts resolve."""
+  from site_config import _clean_filename
+  name = (adapter or {}).get('name') or (adapter or {}).get('id') or ''
+  if not name and url:
+    from urllib.parse import urlsplit
+    host = (urlsplit(url).hostname or '').lower()
+    name = host[4:] if host.startswith('www.') else host
+  return _clean_filename(name).strip(' .') or 'other'
+
+
+def site_movies_dir(adapter: dict | None = None, url: str | None = None) -> str:
+  folder = os.path.join(movies_dir(), site_folder_name(adapter, url))
+  os.makedirs(folder, exist_ok=True)
+  return folder
+
+
 def movies_dir() -> str:
   """movies/ under MEDIA_ROOT, created on demand.
 
@@ -31,8 +55,7 @@ def movies_dir() -> str:
   checkout and the frozen build but not in Docker: there the source is /app and
   the media root /data, so downloads went to an unmounted, root-owned /movies
   that the catalog never looks in."""
-  root = os.environ.get('OASIS_MEDIA_ROOT') or os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-  folder = os.path.join(root, 'movies')
+  folder = os.path.join(media_root(), 'movies')
   os.makedirs(folder, exist_ok=True)
   return folder
 
@@ -63,7 +86,7 @@ def download(url, progress_cb=None):
   # 依 URL 選出對應的站台 adapter（使用者自備，見 backend/sites.example.json）
   adapter = detect_site(url)
 
-  movies_folder = movies_dir()
+  movies_folder = site_movies_dir(adapter)
 
   if uses_ytdlp(adapter):
       return _download_ytdlp(url, adapter, movies_folder, _report)
@@ -102,10 +125,13 @@ def download(url, progress_cb=None):
       print(f'影片名稱: {video_name}')
 
       dirPath = os.path.join(movies_folder, video_name)
-      if os.path.exists(os.path.join(movies_folder, f'{video_name}.mp4')):
-        print('影片已存在, 跳過...')
-        _report(100)
-        return
+      # A video downloaded before site folders existed is still in movies/.
+      for existing in (os.path.join(movies_folder, f'{video_name}.mp4'),
+                       os.path.join(movies_dir(), f'{video_name}.mp4')):
+        if os.path.exists(existing):
+          print('影片已存在, 跳過...')
+          _report(100)
+          return os.path.relpath(existing, media_root())
       if not os.path.exists(dirPath):
           os.makedirs(dirPath)
       folderPath = dirPath
@@ -211,6 +237,7 @@ def download(url, progress_cb=None):
   os.rmdir(folderPath)
   _report(100)
   print(f'✅ 影片已移至: {dst}')
+  return os.path.relpath(dst, media_root())
 
 
 def _download_ytdlp(url, adapter, movies_folder, _report):
@@ -238,11 +265,13 @@ def _download_ytdlp(url, adapter, movies_folder, _report):
         or f'{adapter.get("id")}_video'
     print(f'影片名稱: {video_name}')
 
-    media_root = os.path.dirname(movies_folder)
-    if os.path.exists(os.path.join(movies_folder, f'{video_name}.mp4')):
-        print('影片已存在, 跳過...')
-        _report(100)
-        return os.path.relpath(os.path.join(movies_folder, f'{video_name}.mp4'), media_root)
+    root = media_root()
+    for existing in (os.path.join(movies_folder, f'{video_name}.mp4'),
+                     os.path.join(movies_dir(), f'{video_name}.mp4')):
+        if os.path.exists(existing):
+            print('影片已存在, 跳過...')
+            _report(100)
+            return os.path.relpath(existing, root)
 
     dir_path = os.path.join(movies_folder, video_name)
     os.makedirs(dir_path, exist_ok=True)
@@ -297,4 +326,4 @@ def _download_ytdlp(url, adapter, movies_folder, _report):
 
     _report(100)
     print(f'✅ 影片已移至: {dst}')
-    return os.path.relpath(dst, media_root)
+    return os.path.relpath(dst, root)

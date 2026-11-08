@@ -1062,9 +1062,13 @@ def find_local_file(code: str, title: str) -> str | None:
     # title has the code stripped out of it, so neither field prefix-matches.
     # A code is unique per video, so a substring hit is the same video.
     code_l = (code or '').lower()
+
+    def match(item):
+        return (code_l and code_l in item.lower()) or (title and item.startswith(title[:20]))
+
     for item in os.listdir(movies_dir):
-        if (code_l and code_l in item.lower()) or (title and item.startswith(title[:20])):
-            full = os.path.join(movies_dir, item)
+        full = os.path.join(movies_dir, item)
+        if match(item):
             if os.path.isfile(full) and full.lower().endswith('.mp4'):
                 return os.path.relpath(full, MEDIA_ROOT)
             elif os.path.isdir(full):
@@ -1072,6 +1076,15 @@ def find_local_file(code: str, title: str) -> str | None:
                 for f in os.listdir(full):
                     if f.lower().endswith('.mp4'):
                         return os.path.relpath(os.path.join(full, f), MEDIA_ROOT)
+    # New downloads go one level down, into a per-site folder (movies/SupJav/...).
+    for site in sorted(os.listdir(movies_dir)):
+        site_dir = os.path.join(movies_dir, site)
+        if not os.path.isdir(site_dir) or match(site):
+            continue
+        for item in os.listdir(site_dir):
+            full = os.path.join(site_dir, item)
+            if match(item) and os.path.isfile(full) and full.lower().endswith('.mp4'):
+                return os.path.relpath(full, MEDIA_ROOT)
     return None
 
 
